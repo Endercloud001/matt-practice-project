@@ -154,6 +154,20 @@ export const courseRatings = sqliteTable(
   ]
 );
 
+export const courseComments = sqliteTable("course_comments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  courseId: integer("course_id")
+    .notNull()
+    .references(() => courses.id),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id),
+  content: text("content").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
 export const lessonProgress = sqliteTable("lesson_progress", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id")

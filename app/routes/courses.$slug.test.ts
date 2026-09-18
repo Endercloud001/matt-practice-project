@@ -50,6 +50,26 @@ describe("course detail rating route", () => {
     expect(result.init?.status).toBe(503);
   });
 
+  it("turns a failed comment request into a comment-specific client error", async () => {
+    const formData = new FormData();
+    formData.set("intent", "comment");
+    const result = await clientAction({
+      request: new Request("http://example.com/courses/test-course", {
+        method: "POST",
+        body: formData,
+      }),
+      serverAction: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+    } as never);
+
+    if (!("data" in result)) {
+      throw new Error("Expected a response with status metadata");
+    }
+    expect(result.data).toEqual({
+      success: false,
+      error: "Could not save your comment. Please try again.",
+    });
+  });
+
   it("uses the session identity rather than submitted identity", async () => {
     const otherStudent = testDb
       .insert(schema.users)
@@ -87,6 +107,85 @@ describe("course detail rating route", () => {
         userId: base.user.id,
         courseId: base.course.id,
         ratingUnits: 9,
+      }),
+    ]);
+  });
+
+  it("publishes and deletes comments with the session identity", async () => {
+    const otherStudent = testDb
+      .insert(schema.users)
+      .values({
+        name: "Other Student",
+        email: "commenter@example.com",
+        role: schema.UserRole.Student,
+      })
+      .returning()
+      .get();
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    getCurrentUserId.mockResolvedValue(base.user.id);
+    const publishData = new FormData();
+    publishData.set("intent", "comment");
+    publishData.set("content", "Comment from the signed-in student");
+    publishData.set("userId", String(otherStudent.id));
+
+    expect(
+      await action(
+        routeArgs(
+          new Request(`http://example.com/courses/${base.course.slug}`, {
+            method: "POST",
+            body: publishData,
+          })
+        )
+      )
+    ).toEqual({ success: true, intent: "comment" });
+    const comment = testDb.select().from(schema.courseComments).get();
+    expect(comment).toMatchObject({
+      userId: base.user.id,
+      content: "Comment from the signed-in student",
+    });
+
+    const deleteData = new FormData();
+    deleteData.set("intent", "delete-comment");
+    deleteData.set("commentId", String(comment!.id));
+    expect(
+      await action(
+        routeArgs(
+          new Request(`http://example.com/courses/${base.course.slug}`, {
+            method: "POST",
+            body: deleteData,
+          })
+        )
+      )
+    ).toEqual({ success: true, intent: "delete-comment" });
+    expect(testDb.select().from(schema.courseComments).all()).toEqual([]);
+  });
+
+  it("only loads comment data for signed-in viewers", async () => {
+    testDb
+      .insert(schema.courseComments)
+      .values({
+        courseId: base.course.id,
+        userId: base.user.id,
+        content: "Visible only to authenticated viewers",
+      })
+      .run();
+    getCurrentUserId.mockResolvedValue(null);
+    const signedOut = await loader(
+      routeArgs(new Request(`http://example.com/courses/${base.course.slug}`))
+    );
+    expect(signedOut.comments).toBeNull();
+
+    getCurrentUserId.mockResolvedValue(base.user.id);
+    const signedIn = await loader(
+      routeArgs(new Request(`http://example.com/courses/${base.course.slug}`))
+    );
+    expect(signedIn.comments).toEqual([
+      expect.objectContaining({
+        authorName: "Test User",
+        content: "Visible only to authenticated viewers",
       }),
     ]);
   });

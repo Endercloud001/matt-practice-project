@@ -15,7 +15,7 @@ import {
   getNextIncompleteLesson,
 } from "~/services/progressService";
 import { getCurrentUserId } from "~/lib/session";
-import { CourseStatus, LessonProgressStatus } from "~/db/schema";
+import { CourseStatus, LessonProgressStatus, UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -52,11 +52,28 @@ import {
 import { parseFormData } from "~/lib/validation";
 import { RatingSummary } from "~/components/rating-summary";
 import { CourseRatingInput } from "~/components/course-rating-input";
+import {
+  CourseCommentError,
+  deleteCourseComment,
+  getCourseCommentState,
+  getCourseComments,
+  publishCourseComment,
+} from "~/services/courseCommentService";
+import { getUserById } from "~/services/userService";
+import { CourseComments } from "~/components/course-comments";
 
 const ratingActionSchema = z.object({
   rating: z
     .enum(["1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5"])
     .transform(Number),
+});
+
+const commentActionSchema = z.object({
+  content: z.string(),
+});
+
+const deleteCommentActionSchema = z.object({
+  commentId: z.coerce.number().int().positive(),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -122,6 +139,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       ? getRatingSummary(course.id)
       : null;
   const ratingState = getCourseRatingState(course.id, currentUserId);
+  const currentUser = currentUserId ? getUserById(currentUserId) : null;
+  const comments = currentUserId === null ? null : getCourseComments(course.id);
+  const commentState = getCourseCommentState(course.id, currentUserId);
 
   return {
     course: courseWithDetails,
@@ -136,6 +156,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     tierInfo,
     ratingSummary,
     ratingState,
+    comments,
+    commentState,
+    currentUserRole: currentUser?.role ?? null,
   };
 }
 
@@ -149,6 +172,58 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 
   const currentUserId = await getCurrentUserId(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "comment" || intent === "delete-comment") {
+    if (currentUserId === null) {
+      return data(
+        {
+          success: false as const,
+          error: "Sign in to manage course comments.",
+        },
+        { status: 401 }
+      );
+    }
+
+    try {
+      if (intent === "comment") {
+        const parsed = parseFormData(formData, commentActionSchema);
+        if (!parsed.success) {
+          return data(
+            {
+              success: false as const,
+              error: "Please provide valid comment details.",
+            },
+            { status: 400 }
+          );
+        }
+        publishCourseComment(course.id, currentUserId, parsed.data.content);
+      } else {
+        const parsed = parseFormData(formData, deleteCommentActionSchema);
+        if (!parsed.success) {
+          return data(
+            {
+              success: false as const,
+              error: "Please provide valid comment details.",
+            },
+            { status: 400 }
+          );
+        }
+        deleteCourseComment(parsed.data.commentId, currentUserId);
+      }
+      return { success: true as const, intent };
+    } catch (error) {
+      if (error instanceof CourseCommentError) {
+        return data(
+          { success: false as const, error: error.message },
+          { status: 403 }
+        );
+      }
+      throw error;
+    }
+  }
+
   if (currentUserId === null) {
     return data(
       { success: false as const, error: "Sign in to rate this course." },
@@ -156,7 +231,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     );
   }
 
-  const parsed = parseFormData(await request.formData(), ratingActionSchema);
+  const parsed = parseFormData(formData, ratingActionSchema);
   if (!parsed.success) {
     return data(
       {
@@ -187,14 +262,24 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 }
 
-export async function clientAction({ serverAction }: Route.ClientActionArgs) {
+export async function clientAction({
+  request,
+  serverAction,
+}: Route.ClientActionArgs) {
+  const intent = await request
+    ?.clone()
+    .formData()
+    .then((formData) => formData.get("intent"));
   try {
     return await serverAction();
   } catch {
     return data(
       {
         success: false as const,
-        error: "Could not save your rating. Please try again.",
+        error:
+          intent === "comment" || intent === "delete-comment"
+            ? "Could not save your comment. Please try again."
+            : "Could not save your rating. Please try again.",
       },
       { status: 503 }
     );
@@ -266,6 +351,9 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     tierInfo,
     ratingSummary,
     ratingState,
+    comments,
+    commentState,
+    currentUserRole,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -549,6 +637,14 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
           </Card>
         </div>
       </div>
+      {comments && (
+        <CourseComments
+          comments={comments}
+          canComment={commentState.canComment}
+          currentUserId={currentUserId}
+          currentUserRole={currentUserRole}
+        />
+      )}
     </div>
   );
 }
