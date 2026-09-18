@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Link, useSearchParams } from "react-router";
+import { z } from "zod";
 import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug";
 import {
@@ -14,7 +15,7 @@ import {
   getNextIncompleteLesson,
 } from "~/services/progressService";
 import { getCurrentUserId } from "~/lib/session";
-import { LessonProgressStatus } from "~/db/schema";
+import { CourseStatus, LessonProgressStatus } from "~/db/schema";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -42,6 +43,21 @@ import { formatDuration, formatPrice } from "~/lib/utils";
 import { renderMarkdown } from "~/lib/markdown.server";
 import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice, getCountryTierInfo } from "~/lib/ppp";
+import {
+  getCourseRatingState,
+  getRatingSummary,
+  RatingError,
+  submitCourseRating,
+} from "~/services/ratingService";
+import { parseFormData } from "~/lib/validation";
+import { RatingSummary } from "~/components/rating-summary";
+import { CourseRatingInput } from "~/components/course-rating-input";
+
+const ratingActionSchema = z.object({
+  rating: z
+    .enum(["1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5"])
+    .transform(Number),
+});
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Course";
@@ -101,6 +117,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ? calculatePppPrice(courseWithDetails.price, country)
     : courseWithDetails.price;
   const tierInfo = getCountryTierInfo(country);
+  const ratingSummary =
+    course.status === CourseStatus.Published
+      ? getRatingSummary(course.id)
+      : null;
+  const ratingState = getCourseRatingState(course.id, currentUserId);
 
   return {
     course: courseWithDetails,
@@ -113,10 +134,72 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     currentUserId,
     pppPrice,
     tierInfo,
+    ratingSummary,
+    ratingState,
   };
 }
 
-// No action — enrollment is handled via the purchase confirmation page
+export async function action({ params, request }: Route.ActionArgs) {
+  const course = getCourseBySlug(params.slug);
+  if (!course) {
+    return data(
+      { success: false as const, error: "Course not found." },
+      { status: 404 }
+    );
+  }
+
+  const currentUserId = await getCurrentUserId(request);
+  if (currentUserId === null) {
+    return data(
+      { success: false as const, error: "Sign in to rate this course." },
+      { status: 401 }
+    );
+  }
+
+  const parsed = parseFormData(await request.formData(), ratingActionSchema);
+  if (!parsed.success) {
+    return data(
+      {
+        success: false as const,
+        error:
+          parsed.errors.rating ??
+          "Rating must be between 1 and 5 in half-star steps.",
+      },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const saved = submitCourseRating(
+      course.id,
+      currentUserId,
+      parsed.data.rating
+    );
+    return { success: true as const, rating: saved.rating };
+  } catch (error) {
+    if (error instanceof RatingError) {
+      return data(
+        { success: false as const, error: error.message },
+        { status: 403 }
+      );
+    }
+    throw error;
+  }
+}
+
+export async function clientAction({ serverAction }: Route.ClientActionArgs) {
+  try {
+    return await serverAction();
+  } catch {
+    return data(
+      {
+        success: false as const,
+        error: "Could not save your rating. Please try again.",
+      },
+      { status: 503 }
+    );
+  }
+}
 
 export function HydrateFallback() {
   return (
@@ -181,6 +264,8 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     currentUserId,
     pppPrice,
     tierInfo,
+    ratingSummary,
+    ratingState,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -321,6 +406,14 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
             </span>
           )}
         </div>
+        {ratingSummary && ratingSummary.count > 0 && (
+          <div className="mt-3">
+            <RatingSummary
+              average={ratingSummary.average}
+              count={ratingSummary.count}
+            />
+          </div>
+        )}
       </div>
 
       {/* Two-column: sales copy left, sidebar right */}
@@ -361,6 +454,16 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
 
         {/* Right column: progress/enrollment card */}
         <div className="space-y-6">
+          {(ratingState.canRate || ratingState.personalRating !== null) && (
+            <Card>
+              <CardHeader>
+                <h2 className="text-lg font-semibold">Rate this course</h2>
+              </CardHeader>
+              <CardContent>
+                <CourseRatingInput {...ratingState} />
+              </CardContent>
+            </Card>
+          )}
           <Card className="sticky top-6">
             <CardHeader>
               <h2 className="text-lg font-semibold">

@@ -7,6 +7,7 @@ import {
   modules,
   lessons,
   CourseStatus,
+  courseRatings,
 } from "~/db/schema";
 
 // ─── Course Service ───
@@ -88,10 +89,15 @@ export function buildCourseQuery(
       instructorName: users.name,
       instructorAvatarUrl: users.avatarUrl,
       categoryName: categories.name,
+      ratingAverage: sql<
+        number | null
+      >`avg(${courseRatings.ratingUnits}) / 2.0`,
+      ratingCount: sql<number>`count(${courseRatings.id})`,
     })
     .from(courses)
     .innerJoin(users, eq(courses.instructorId, users.id))
-    .innerJoin(categories, eq(courses.categoryId, categories.id));
+    .innerJoin(categories, eq(courses.categoryId, categories.id))
+    .leftJoin(courseRatings, eq(courses.id, courseRatings.courseId));
 
   if (category) {
     conditions.push(eq(categories.slug, category));
@@ -100,12 +106,14 @@ export function buildCourseQuery(
   const filtered =
     conditions.length > 0 ? query.where(and(...conditions)) : query;
 
+  const grouped = filtered.groupBy(courses.id);
+
   const sorted =
     sortBy === "title"
-      ? filtered.orderBy(courses.title)
+      ? grouped.orderBy(courses.title)
       : sortBy === "oldest"
-        ? filtered.orderBy(courses.createdAt)
-        : filtered.orderBy(sql`${courses.createdAt} DESC`);
+        ? grouped.orderBy(courses.createdAt)
+        : grouped.orderBy(sql`${courses.createdAt} DESC`);
 
   return sorted.limit(limit).offset(offset).all();
 }

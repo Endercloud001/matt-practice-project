@@ -15,6 +15,7 @@ import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount } from "~/services/progressService";
 import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice } from "~/lib/ppp";
+import { RatingSummary } from "~/components/rating-summary";
 
 export function meta() {
   return [
@@ -209,6 +210,15 @@ export default function CourseCatalog({ loaderData }: Route.ComponentProps) {
                   <p className="line-clamp-2 text-sm text-muted-foreground">
                     {course.description}
                   </p>
+                  {course.status === CourseStatus.Published &&
+                    course.ratingCount > 0 && (
+                      <div className="mt-3">
+                        <RatingSummary
+                          average={course.ratingAverage}
+                          count={course.ratingCount}
+                        />
+                      </div>
+                    )}
                 </CardContent>
                 {course.progress !== null && course.progress > 0 && (
                   <CardContent className="pt-0">

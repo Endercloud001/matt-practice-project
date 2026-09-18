@@ -12,6 +12,7 @@ import { DevUI } from "~/components/dev-ui";
 import { getAllUsers, getUserById } from "~/services/userService";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
+import { RatingSummary } from "~/components/rating-summary";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -186,6 +187,15 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                     <p className="line-clamp-2 text-sm text-muted-foreground">
                       {course.description}
                     </p>
+                    {course.status === CourseStatus.Published &&
+                      course.ratingCount > 0 && (
+                        <div className="mt-3">
+                          <RatingSummary
+                            average={course.ratingAverage}
+                            count={course.ratingCount}
+                          />
+                        </div>
+                      )}
                   </CardContent>
                   <CardFooter className="flex items-center justify-between text-xs text-muted-foreground">
                     <span className="flex items-center gap-1">

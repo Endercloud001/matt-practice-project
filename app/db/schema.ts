@@ -1,4 +1,12 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import {
+  check,
+  integer,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 export enum UserRole {
   Student = "student",
@@ -115,6 +123,36 @@ export const enrollments = sqliteTable("enrollments", {
     .$defaultFn(() => new Date().toISOString()),
   completedAt: text("completed_at"),
 });
+
+export const courseRatings = sqliteTable(
+  "course_ratings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    courseId: integer("course_id")
+      .notNull()
+      .references(() => courses.id),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    ratingUnits: integer("rating_units").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    uniqueIndex("course_ratings_course_user_unique").on(
+      table.courseId,
+      table.userId
+    ),
+    check(
+      "course_ratings_rating_units_check",
+      sql`typeof(${table.ratingUnits}) = 'integer' and ${table.ratingUnits} between 2 and 10`
+    ),
+  ]
+);
 
 export const lessonProgress = sqliteTable("lesson_progress", {
   id: integer("id").primaryKey({ autoIncrement: true }),

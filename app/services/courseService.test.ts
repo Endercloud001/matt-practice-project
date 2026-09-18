@@ -231,6 +231,41 @@ describe("courseService", () => {
       expect(results[0].title).toBe("Test Course");
       expect(results[0].instructorName).toBe("Test Instructor");
       expect(results[0].categoryName).toBe("Programming");
+      expect(results[0].ratingAverage).toBeNull();
+      expect(results[0].ratingCount).toBe(0);
+    });
+
+    it("returns grouped rating summaries without duplicating course rows", () => {
+      const secondStudent = testDb
+        .insert(schema.users)
+        .values({
+          name: "Second Student",
+          email: "second@example.com",
+          role: schema.UserRole.Student,
+        })
+        .returning()
+        .get();
+      testDb
+        .insert(schema.courseRatings)
+        .values([
+          {
+            courseId: base.course.id,
+            userId: base.user.id,
+            ratingUnits: 9,
+          },
+          {
+            courseId: base.course.id,
+            userId: secondStudent.id,
+            ratingUnits: 6,
+          },
+        ])
+        .run();
+
+      const results = buildCourseQuery(null, null, null, null, 10, 0);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].ratingAverage).toBe(3.75);
+      expect(results[0].ratingCount).toBe(2);
     });
 
     it("filters by search term in title", () => {
