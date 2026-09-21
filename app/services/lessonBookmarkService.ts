@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "~/db";
 import {
   CourseStatus,
@@ -19,6 +19,36 @@ type BookmarkState = {
   lessonIds: number[];
 };
 
+type BookmarkEligibility = {
+  canView: boolean;
+  canEdit: boolean;
+  reason: string | null;
+};
+
+function evaluateBookmarkEligibility(opts: {
+  user: typeof users.$inferSelect | undefined;
+  course: typeof courses.$inferSelect | undefined;
+  enrolled: boolean;
+}): BookmarkEligibility {
+  if (!opts.user || opts.user.role !== UserRole.Student) {
+    return { canView: false, canEdit: false, reason: "Only enrolled Students can manage bookmarks." };
+  }
+  if (!opts.course) {
+    return { canView: false, canEdit: false, reason: "Course not found." };
+  }
+  if (!opts.enrolled) {
+    return { canView: false, canEdit: false, reason: "You must be enrolled to manage bookmarks." };
+  }
+  if (opts.course.status !== CourseStatus.Published) {
+    return {
+      canView: true,
+      canEdit: false,
+      reason: "Bookmarks cannot currently be edited for this course.",
+    };
+  }
+  return { canView: true, canEdit: true, reason: null };
+}
+
 function getEligibility(opts: { courseId: number; userId: number }) {
   const user = db.select().from(users).where(eq(users.id, opts.userId)).get();
   const course = db
@@ -37,20 +67,7 @@ function getEligibility(opts: { courseId: number; userId: number }) {
     )
     .get();
 
-  if (!user || user.role !== UserRole.Student) {
-    return { canView: false, canEdit: false, reason: "Only enrolled Students can manage bookmarks." };
-  }
-  if (!course || !enrollment) {
-    return { canView: false, canEdit: false, reason: "You must be enrolled to manage bookmarks." };
-  }
-  if (course.status !== CourseStatus.Published) {
-    return {
-      canView: true,
-      canEdit: false,
-      reason: "Bookmarks cannot currently be edited for this course.",
-    };
-  }
-  return { canView: true, canEdit: true, reason: null };
+  return evaluateBookmarkEligibility({ user, course, enrolled: Boolean(enrollment) });
 }
 
 export function getCourseBookmarkState(opts: {
@@ -122,14 +139,13 @@ export function saveLessonBookmark(opts: {
       )
       .get();
 
-    if (!user || user.role !== UserRole.Student || !enrollment) {
-      throw new BookmarkError("Only enrolled Students can manage bookmarks.");
-    }
-    if (!course) {
-      throw new BookmarkError("Course not found.");
-    }
-    if (course.status !== CourseStatus.Published) {
-      throw new BookmarkError("Bookmarks cannot currently be edited for this course.");
+    const eligibility = evaluateBookmarkEligibility({
+      user,
+      course,
+      enrolled: Boolean(enrollment),
+    });
+    if (!eligibility.canEdit) {
+      throw new BookmarkError(eligibility.reason ?? "Bookmarks cannot be edited.");
     }
 
     if (opts.bookmarked) {
@@ -150,45 +166,4 @@ export function saveLessonBookmark(opts: {
 
     return { lessonId: opts.lessonId, bookmarked: opts.bookmarked };
   });
-}
-
-export function removeCourseBookmarksWhenIneligible(opts: {
-  userId: number;
-  courseId: number;
-}) {
-  return db.transaction((tx) => {
-    const enrollment = tx
-      .select({ id: enrollments.id })
-      .from(enrollments)
-      .where(
-        and(
-          eq(enrollments.userId, opts.userId),
-          eq(enrollments.courseId, opts.courseId)
-        )
-      )
-      .get();
-    if (enrollment) return;
-
-    const courseLessons = tx
-      .select({ id: lessons.id })
-      .from(lessons)
-      .innerJoin(modules, eq(lessons.moduleId, modules.id))
-      .where(eq(modules.courseId, opts.courseId))
-      .all();
-    const lessonIds = courseLessons.map((lesson) => lesson.id);
-    if (lessonIds.length > 0) {
-      tx.delete(lessonBookmarks)
-        .where(
-          and(
-            eq(lessonBookmarks.userId, opts.userId),
-            inArray(lessonBookmarks.lessonId, lessonIds)
-          )
-        )
-        .run();
-    }
-  });
-}
-
-export function removeAllUserBookmarks(opts: { userId: number }) {
-  return db.delete(lessonBookmarks).where(eq(lessonBookmarks.userId, opts.userId)).run();
 }

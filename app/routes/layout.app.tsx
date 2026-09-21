@@ -1,4 +1,4 @@
-import { Outlet } from "react-router";
+import { Outlet, type ShouldRevalidateFunctionArgs } from "react-router";
 import type { Route } from "./+types/layout.app";
 import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
@@ -12,6 +12,7 @@ import {
   getTotalLessonCount,
 } from "~/services/progressService";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
+import { shouldSkipBookmarkRevalidation } from "~/lib/bookmark";
 import { isTeamAdmin } from "~/services/teamService";
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -62,6 +63,17 @@ export async function loader({ request }: Route.LoaderArgs) {
     countries: COUNTRIES,
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
   };
+}
+
+export function shouldRevalidate({
+  actionResult,
+  defaultShouldRevalidate,
+  formData,
+}: ShouldRevalidateFunctionArgs) {
+  if (shouldSkipBookmarkRevalidation({ actionResult, formData })) {
+    return false;
+  }
+  return defaultShouldRevalidate;
 }
 
 export default function AppLayout({ loaderData }: Route.ComponentProps) {

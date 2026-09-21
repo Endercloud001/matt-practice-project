@@ -65,14 +65,17 @@ describe("lessonBookmarkService", () => {
     }
   );
 
-  it("keeps an existing bookmark visible but read-only while Draft", () => {
+  it.each([schema.CourseStatus.Draft, schema.CourseStatus.Archived])(
+    "keeps an existing bookmark visible but read-only while %s",
+    (status) => {
     saveLessonBookmark({ lessonId: lesson.id, userId: base.user.id, bookmarked: true });
-    testDb.update(schema.courses).set({ status: schema.CourseStatus.Draft }).where(eq(schema.courses.id, base.course.id)).run();
+    testDb.update(schema.courses).set({ status }).where(eq(schema.courses.id, base.course.id)).run();
     expect(getCourseBookmarkState({ courseId: base.course.id, userId: base.user.id }))
       .toMatchObject({ canView: true, canEdit: false, lessonIds: [lesson.id] });
     expect(() => saveLessonBookmark({ lessonId: lesson.id, userId: base.user.id, bookmarked: false }))
       .toThrow("Bookmarks cannot currently be edited for this course.");
-  });
+    }
+  );
 
   it("hides bookmark state for signed-out and unenrolled viewers", () => {
     expect(getCourseBookmarkState({ courseId: base.course.id, userId: null }))

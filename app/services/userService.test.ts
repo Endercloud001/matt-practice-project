@@ -38,4 +38,24 @@ describe("userService", () => {
 
     expect(testDb.select().from(schema.lessonBookmarks).all()).toEqual([]);
   });
+
+  it("does not restore bookmarks when Student eligibility is restored", () => {
+    const module = testDb
+      .insert(schema.modules)
+      .values({ courseId: base.course.id, title: "Module", position: 1 })
+      .returning()
+      .get();
+    const lesson = testDb
+      .insert(schema.lessons)
+      .values({ moduleId: module.id, title: "Lesson", position: 1 })
+      .returning()
+      .get();
+    testDb.insert(schema.enrollments).values({ userId: base.user.id, courseId: base.course.id }).run();
+    saveLessonBookmark({ lessonId: lesson.id, userId: base.user.id, bookmarked: true });
+
+    updateUserRole({ id: base.user.id, role: schema.UserRole.Instructor });
+    updateUserRole({ id: base.user.id, role: schema.UserRole.Student });
+
+    expect(testDb.select().from(schema.lessonBookmarks).all()).toEqual([]);
+  });
 });

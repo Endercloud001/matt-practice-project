@@ -56,6 +56,7 @@ import { resolveCountry } from "~/lib/country.server";
 import { checkPppAccess, COUNTRIES } from "~/lib/ppp";
 import { findPurchase } from "~/services/purchaseService";
 import { parseFormData, parseParams } from "~/lib/validation";
+import { shouldSkipBookmarkRevalidation } from "~/lib/bookmark";
 import {
   BookmarkError,
   getCourseBookmarkState,
@@ -302,26 +303,28 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
 export async function action({ params, request }: Route.ActionArgs) {
   const { slug, lessonId } = parseParams(params, lessonParamsSchema);
-
-  const course = getCourseBySlug(slug);
-  if (!course) {
-    throw data("Course not found", { status: 404 });
-  }
-
-  const currentUserId = await getCurrentUserId(request);
-  if (!currentUserId) {
-    throw data("You must be logged in", { status: 401 });
-  }
-
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  if (intent === "mark-complete") {
-    markLessonComplete(currentUserId, lessonId);
-    return { success: true };
-  }
-
   if (intent === "bookmark") {
+    const course = getCourseBySlug(slug);
+    if (!course) {
+      return {
+        success: false as const,
+        error: "Course not found.",
+        bookmarkState: { canView: false, canEdit: false, lessonIds: [] },
+      };
+    }
+
+    const currentUserId = await getCurrentUserId(request);
+    if (!currentUserId) {
+      return {
+        success: false as const,
+        error: "You must be logged in to manage bookmarks.",
+        bookmarkState: { canView: false, canEdit: false, lessonIds: [] },
+      };
+    }
+
     const parsed = parseFormData(formData, bookmarkSchema);
     if (!parsed.success) {
       return data({ success: false as const, error: "Invalid bookmark request." }, { status: 400 });
@@ -329,7 +332,11 @@ export async function action({ params, request }: Route.ActionArgs) {
     const lesson = getLessonById(lessonId);
     const module = lesson ? getModuleById(lesson.moduleId) : null;
     if (!lesson || !module || module.courseId !== course.id) {
-      return data({ success: false as const, error: "Lesson not found." }, { status: 404 });
+      return {
+        success: false as const,
+        error: "Lesson not found.",
+        bookmarkState: getCourseBookmarkState({ courseId: course.id, userId: currentUserId }),
+      };
     }
     const purchase = findPurchase(currentUserId, course.id);
     const pppAccess = checkPppAccess(
@@ -362,6 +369,21 @@ export async function action({ params, request }: Route.ActionArgs) {
       }
       throw error;
     }
+  }
+
+  const course = getCourseBySlug(slug);
+  if (!course) {
+    throw data("Course not found", { status: 404 });
+  }
+
+  const currentUserId = await getCurrentUserId(request);
+  if (!currentUserId) {
+    throw data("You must be logged in", { status: 401 });
+  }
+
+  if (intent === "mark-complete") {
+    markLessonComplete(currentUserId, lessonId);
+    return { success: true };
   }
 
   if (intent === "submit-quiz") {
@@ -397,14 +419,14 @@ export async function clientAction({ request, serverAction }: Route.ClientAction
   const intent = await request.clone().formData().then((formData) => formData.get("intent"));
   try {
     return await serverAction();
-  } catch {
+  } catch (error) {
     if (intent === "bookmark") {
       return data(
         { success: false as const, error: "Bookmark save outcome is unconfirmed. Refresh to reconcile with the server." },
         { status: 503 }
       );
     }
-    throw new TypeError("Lesson action request failed");
+    throw error;
   }
 }
 
@@ -413,13 +435,7 @@ export function shouldRevalidate({
   defaultShouldRevalidate,
   formData,
 }: ShouldRevalidateFunctionArgs) {
-  if (
-    formData?.get("intent") === "bookmark" &&
-    typeof actionResult === "object" &&
-    actionResult !== null &&
-    "success" in actionResult &&
-    actionResult.success === true
-  ) {
+  if (shouldSkipBookmarkRevalidation({ actionResult, formData })) {
     return false;
   }
   return defaultShouldRevalidate;
@@ -931,7 +947,7 @@ function BookmarkButton({
         onTouchStart={() => setShowHint((visible) => !visible)}
       >
         <Button variant="outline" size="sm" disabled aria-describedby="bookmark-read-only-hint">
-          <Bookmark className={cn("mr-1.5 size-4", bookmarked && "fill-yellow-400 text-yellow-500")} />
+          <Bookmark className={cn("mr-1.5 size-4 text-muted-foreground", bookmarked && "fill-yellow-400 text-yellow-500")} />
           {bookmarked ? "Bookmarked" : "Bookmark"}
         </Button>
         {showHint && <span id="bookmark-read-only-hint" role="tooltip" className="absolute left-0 top-full z-10 mt-1 w-max rounded bg-foreground px-2 py-1 text-xs text-background">{tooltip}</span>}
@@ -940,7 +956,7 @@ function BookmarkButton({
   }
   return (
     <Button variant="outline" size="sm" disabled={isSaving} onClick={onSubmit}>
-      <Bookmark className={cn("mr-1.5 size-4", bookmarked && "fill-yellow-400 text-yellow-500")} />
+      <Bookmark className={cn("mr-1.5 size-4 text-muted-foreground", bookmarked && "fill-yellow-400 text-yellow-500")} />
       {bookmarked ? "Bookmarked" : "Bookmark"}
     </Button>
   );

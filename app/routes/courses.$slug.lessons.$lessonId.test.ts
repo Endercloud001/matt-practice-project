@@ -16,6 +16,7 @@ vi.mock("~/lib/session", () => ({ getCurrentUserId }));
 vi.mock("~/lib/country.server", () => ({ resolveCountry: vi.fn().mockResolvedValue("US") }));
 
 import { action, clientAction, shouldRevalidate } from "./courses.$slug.lessons.$lessonId";
+import { shouldRevalidate as shouldRevalidateAppLayout } from "./layout.app";
 
 function routeArgs(request: Request) {
   return {
@@ -64,6 +65,25 @@ describe("lesson bookmark route", () => {
     ]);
   });
 
+  it("returns a local bookmark rejection when the session has expired", async () => {
+    getCurrentUserId.mockResolvedValue(null);
+    const formData = new FormData();
+    formData.set("intent", "bookmark");
+    formData.set("bookmarked", "true");
+
+    await expect(
+      action(
+        routeArgs(
+          new Request("http://example.com", { method: "POST", body: formData })
+        )
+      )
+    ).resolves.toEqual({
+      success: false,
+      error: "You must be logged in to manage bookmarks.",
+      bookmarkState: { canView: false, canEdit: false, lessonIds: [] },
+    });
+  });
+
   it("turns a lost bookmark response into an unconfirmed local result", async () => {
     const formData = new FormData();
     formData.set("intent", "bookmark");
@@ -76,6 +96,19 @@ describe("lesson bookmark route", () => {
       data: { success: false, error: "Bookmark save outcome is unconfirmed. Refresh to reconcile with the server." },
       init: { status: 503 },
     });
+  });
+
+  it("preserves non-bookmark action errors", async () => {
+    const error = new Error("Quiz action failed");
+    const formData = new FormData();
+    formData.set("intent", "submit-quiz");
+
+    await expect(
+      clientAction({
+        request: new Request("http://example.com", { method: "POST", body: formData }),
+        serverAction: vi.fn().mockRejectedValue(error),
+      } as never)
+    ).rejects.toBe(error);
   });
 
   it("does not revalidate the page after a confirmed bookmark save", () => {
@@ -104,5 +137,18 @@ describe("lesson bookmark route", () => {
         defaultShouldRevalidate: true,
       } as never)
     ).toBe(true);
+  });
+
+  it("does not revalidate the app layout after a confirmed bookmark save", () => {
+    const formData = new FormData();
+    formData.set("intent", "bookmark");
+
+    expect(
+      shouldRevalidateAppLayout({
+        formData,
+        actionResult: { success: true, bookmark: { lessonId: lesson.id, bookmarked: true } },
+        defaultShouldRevalidate: true,
+      } as never)
+    ).toBe(false);
   });
 });
