@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { db } from "~/db";
 import {
   enrollments,
@@ -6,6 +6,7 @@ import {
   modules,
   lessons,
   lessonProgress,
+  lessonBookmarks,
   LessonProgressStatus,
 } from "~/db/schema";
 
@@ -95,19 +96,42 @@ export function enrollUser(
   return enrollment;
 }
 
-export function unenrollUser(userId: number, courseId: number) {
-  const existing = findEnrollment(userId, courseId);
+export function unenrollUser(opts: { userId: number; courseId: number }) {
+  const existing = findEnrollment(opts.userId, opts.courseId);
   if (!existing) {
     throw new Error("User is not enrolled in this course");
   }
 
-  return db
-    .delete(enrollments)
-    .where(
-      and(eq(enrollments.userId, userId), eq(enrollments.courseId, courseId))
-    )
-    .returning()
-    .get();
+  return db.transaction((tx) => {
+    const removed = tx
+      .delete(enrollments)
+      .where(
+        and(
+          eq(enrollments.userId, opts.userId),
+          eq(enrollments.courseId, opts.courseId)
+        )
+      )
+      .returning()
+      .get();
+    const courseLessons = tx
+      .select({ id: lessons.id })
+      .from(lessons)
+      .innerJoin(modules, eq(lessons.moduleId, modules.id))
+      .where(eq(modules.courseId, opts.courseId))
+      .all();
+    const lessonIds = courseLessons.map((lesson) => lesson.id);
+    if (lessonIds.length > 0) {
+      tx.delete(lessonBookmarks)
+        .where(
+          and(
+            eq(lessonBookmarks.userId, opts.userId),
+            inArray(lessonBookmarks.lessonId, lessonIds)
+          )
+        )
+        .run();
+    }
+    return removed;
+  });
 }
 
 export function markEnrollmentComplete(userId: number, courseId: number) {

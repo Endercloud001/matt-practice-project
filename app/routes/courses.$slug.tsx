@@ -34,6 +34,7 @@ import {
   Clock,
   Pencil,
   PlayCircle,
+  Bookmark,
   Users,
 } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
@@ -61,6 +62,7 @@ import {
 } from "~/services/courseCommentService";
 import { getUserById } from "~/services/userService";
 import { CourseComments } from "~/components/course-comments";
+import { getCourseBookmarkState } from "~/services/lessonBookmarkService";
 
 const ratingActionSchema = z.object({
   rating: z
@@ -142,6 +144,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const currentUser = currentUserId ? getUserById(currentUserId) : null;
   const comments = currentUserId === null ? null : getCourseComments(course.id);
   const commentState = getCourseCommentState(course.id, currentUserId);
+  const bookmarkState = getCourseBookmarkState({
+    courseId: course.id,
+    userId: currentUserId,
+  });
 
   return {
     course: courseWithDetails,
@@ -159,6 +165,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     comments,
     commentState,
     currentUserRole: currentUser?.role ?? null,
+    bookmarkState,
   };
 }
 
@@ -354,6 +361,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     comments,
     commentState,
     currentUserRole,
+    bookmarkState,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -535,7 +543,8 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
               course={course}
               enrolled={enrolled}
               isInstructor={isInstructor}
-              lessonProgressMap={lessonProgressMap}
+          lessonProgressMap={lessonProgressMap}
+          bookmarkedLessonIds={bookmarkState.lessonIds}
             />
           </div>
         </div>
@@ -654,6 +663,7 @@ function CourseContent({
   enrolled,
   isInstructor,
   lessonProgressMap,
+  bookmarkedLessonIds,
 }: {
   course: {
     id: number;
@@ -671,6 +681,7 @@ function CourseContent({
   enrolled: boolean;
   isInstructor: boolean;
   lessonProgressMap: Record<number, string>;
+  bookmarkedLessonIds: number[];
 }) {
   return (
     <div>
@@ -684,13 +695,16 @@ function CourseContent({
           {course.modules.map((mod) => (
             <Card key={mod.id}>
               <CardHeader>
-                <h3 className="font-semibold">
+                <h3 className="flex items-center gap-2 font-semibold">
                   <Link
                     to={`/courses/${course.slug}/${mod.id}`}
                     className="hover:underline"
                   >
                     {mod.title}
                   </Link>
+                  {mod.lessons.some((lesson) => bookmarkedLessonIds.includes(lesson.id)) && (
+                    <Bookmark className="size-4 fill-yellow-400 text-yellow-500" />
+                  )}
                 </h3>
                 <p className="text-sm text-muted-foreground">
                   {mod.lessons.length} lessons
@@ -725,6 +739,9 @@ function CourseContent({
                                 )}
                               </span>
                             )}
+                            {bookmarkedLessonIds.includes(lesson.id) && (
+                              <Bookmark className="size-4 shrink-0 fill-yellow-400 text-yellow-500" />
+                            )}
                           </Link>
                         </li>
                       );
@@ -756,6 +773,9 @@ function CourseContent({
                                 )}
                               </span>
                             )}
+                            {bookmarkedLessonIds.includes(lesson.id) && (
+                              <Bookmark className="size-4 shrink-0 fill-yellow-400 text-yellow-500" />
+                            )}
                           </Link>
                         ) : (
                           <div className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -771,6 +791,9 @@ function CourseContent({
                                   false
                                 )}
                               </span>
+                            )}
+                            {bookmarkedLessonIds.includes(lesson.id) && (
+                              <Bookmark className="size-4 shrink-0 fill-yellow-400 text-yellow-500" />
                             )}
                           </div>
                         )}

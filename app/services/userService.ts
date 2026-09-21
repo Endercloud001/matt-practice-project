@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "~/db";
-import { users, UserRole } from "~/db/schema";
+import { lessonBookmarks, users, UserRole } from "~/db/schema";
 
 // ─── User Service ───
 // Handles user CRUD operations and role management.
@@ -49,11 +49,19 @@ export function updateUser(
     .get();
 }
 
-export function updateUserRole(id: number, role: UserRole) {
-  return db
-    .update(users)
-    .set({ role })
-    .where(eq(users.id, id))
-    .returning()
-    .get();
+export function updateUserRole(opts: { id: number; role: UserRole }) {
+  return db.transaction((tx) => {
+    const user = tx
+      .update(users)
+      .set({ role: opts.role })
+      .where(eq(users.id, opts.id))
+      .returning()
+      .get();
+    if (opts.role !== UserRole.Student) {
+      tx.delete(lessonBookmarks)
+        .where(eq(lessonBookmarks.userId, opts.id))
+        .run();
+    }
+    return user;
+  });
 }

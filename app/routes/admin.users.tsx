@@ -94,7 +94,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   if (intent === "update-role") {
     const { userId, role } = parsed.data;
-    updateUserRole(userId, role);
+    updateUserRole({ id: userId, role });
     return { success: true };
   }
 

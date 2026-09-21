@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Link, useFetcher, useNavigate } from "react-router";
+import { Link, useFetcher, useNavigate, type ShouldRevalidateFunctionArgs } from "react-router";
 import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug.lessons.$lessonId";
 import {
@@ -45,6 +45,7 @@ import {
   XCircle,
   Trophy,
   RotateCcw,
+  Bookmark,
 } from "lucide-react";
 import { cn, formatDuration } from "~/lib/utils";
 import { renderMarkdown } from "~/lib/markdown.server";
@@ -55,6 +56,11 @@ import { resolveCountry } from "~/lib/country.server";
 import { checkPppAccess, COUNTRIES } from "~/lib/ppp";
 import { findPurchase } from "~/services/purchaseService";
 import { parseFormData, parseParams } from "~/lib/validation";
+import {
+  BookmarkError,
+  getCourseBookmarkState,
+  saveLessonBookmark,
+} from "~/services/lessonBookmarkService";
 
 const lessonParamsSchema = z.object({
   slug: z.string().min(1),
@@ -63,6 +69,11 @@ const lessonParamsSchema = z.object({
 
 const markCompleteSchema = z.object({
   intent: z.literal("mark-complete"),
+});
+
+const bookmarkSchema = z.object({
+  intent: z.literal("bookmark"),
+  bookmarked: z.enum(["true", "false"]).transform((value) => value === "true"),
 });
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
@@ -138,6 +149,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let lastWatchPosition = 0;
   let watchProgress = 0;
   let lessonProgressMap: Record<number, string> = {};
+  const bookmarkState = getCourseBookmarkState({
+    courseId: course.id,
+    userId: currentUserId,
+  });
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
@@ -278,6 +293,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
+    bookmarkState,
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
@@ -303,6 +319,49 @@ export async function action({ params, request }: Route.ActionArgs) {
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
     return { success: true };
+  }
+
+  if (intent === "bookmark") {
+    const parsed = parseFormData(formData, bookmarkSchema);
+    if (!parsed.success) {
+      return data({ success: false as const, error: "Invalid bookmark request." }, { status: 400 });
+    }
+    const lesson = getLessonById(lessonId);
+    const module = lesson ? getModuleById(lesson.moduleId) : null;
+    if (!lesson || !module || module.courseId !== course.id) {
+      return data({ success: false as const, error: "Lesson not found." }, { status: 404 });
+    }
+    const purchase = findPurchase(currentUserId, course.id);
+    const pppAccess = checkPppAccess(
+      course.price,
+      course.pppEnabled,
+      purchase?.country ?? null,
+      await resolveCountry(request)
+    );
+    if (pppAccess.blocked) {
+      return {
+        success: false as const,
+        error: "Bookmark changes are unavailable from your current region.",
+        bookmarkState: getCourseBookmarkState({ courseId: course.id, userId: currentUserId }),
+      };
+    }
+    try {
+      const saved = saveLessonBookmark({
+        lessonId,
+        userId: currentUserId,
+        bookmarked: parsed.data.bookmarked,
+      });
+      return { success: true as const, bookmark: saved };
+    } catch (error) {
+      if (error instanceof BookmarkError) {
+        return {
+          success: false as const,
+          error: error.message,
+          bookmarkState: getCourseBookmarkState({ courseId: course.id, userId: currentUserId }),
+        };
+      }
+      throw error;
+    }
   }
 
   if (intent === "submit-quiz") {
@@ -332,6 +391,38 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 
   throw data("Invalid action", { status: 400 });
+}
+
+export async function clientAction({ request, serverAction }: Route.ClientActionArgs) {
+  const intent = await request.clone().formData().then((formData) => formData.get("intent"));
+  try {
+    return await serverAction();
+  } catch {
+    if (intent === "bookmark") {
+      return data(
+        { success: false as const, error: "Bookmark save outcome is unconfirmed. Refresh to reconcile with the server." },
+        { status: 503 }
+      );
+    }
+    throw new TypeError("Lesson action request failed");
+  }
+}
+
+export function shouldRevalidate({
+  actionResult,
+  defaultShouldRevalidate,
+  formData,
+}: ShouldRevalidateFunctionArgs) {
+  if (
+    formData?.get("intent") === "bookmark" &&
+    typeof actionResult === "object" &&
+    actionResult !== null &&
+    "success" in actionResult &&
+    actionResult.success === true
+  ) {
+    return false;
+  }
+  return defaultShouldRevalidate;
 }
 
 const AUTOPLAY_KEY = "cadence-autoplay";
@@ -379,6 +470,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
+    bookmarkState,
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
@@ -386,7 +478,35 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
   const [autoplay, toggleAutoplay] = useAutoplay();
   const fetcher = useFetcher({ key: `mark-complete-${lesson.id}` });
   const quizFetcher = useFetcher({ key: `quiz-${lesson.id}` });
+  const bookmarkFetcher = useFetcher<typeof action>({ key: `bookmark-${lesson.id}` });
   const navigate = useNavigate();
+  const [bookmarkedLessonIds, setBookmarkedLessonIds] = useState(bookmarkState.lessonIds);
+  const [bookmarkAccess, setBookmarkAccess] = useState(bookmarkState);
+
+  useEffect(() => {
+    setBookmarkedLessonIds(bookmarkState.lessonIds);
+    setBookmarkAccess(bookmarkState);
+  }, [bookmarkState.canEdit, bookmarkState.canView, bookmarkState.lessonIds]);
+
+  useEffect(() => {
+    const bookmarkResult = bookmarkFetcher.data;
+    if (bookmarkResult?.success && "bookmark" in bookmarkResult && bookmarkResult.bookmark) {
+      setBookmarkedLessonIds((ids) =>
+        bookmarkResult.bookmark.bookmarked
+          ? [...new Set([...ids, bookmarkResult.bookmark.lessonId])]
+          : ids.filter((id) => id !== bookmarkResult.bookmark.lessonId)
+      );
+    } else if (bookmarkResult && "bookmarkState" in bookmarkResult && bookmarkResult.bookmarkState) {
+      setBookmarkAccess(bookmarkResult.bookmarkState);
+      setBookmarkedLessonIds(bookmarkResult.bookmarkState.lessonIds);
+    }
+    if (bookmarkResult && "error" in bookmarkResult && typeof bookmarkResult.error === "string") {
+      toast.error(bookmarkResult.error);
+    }
+  }, [bookmarkFetcher.data]);
+
+  const isSavingBookmark = bookmarkFetcher.state !== "idle";
+  const isBookmarked = bookmarkedLessonIds.includes(lesson.id);
 
   const isMarking =
     fetcher.state !== "idle" &&
@@ -454,6 +574,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
         currentLessonId={lesson.id}
         lessonProgressMap={lessonProgressMap}
         enrolled={enrolled}
+        bookmarkedLessonIds={bookmarkedLessonIds}
       />
 
       <div className="flex-1 p-6 lg:p-8">
@@ -501,6 +622,19 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
                   Open Code
                 </Button>
               </a>
+            )}
+            {bookmarkAccess.canView && (
+              <BookmarkButton
+                bookmarked={isBookmarked}
+                canEdit={bookmarkAccess.canEdit}
+                isSaving={isSavingBookmark}
+                onSubmit={() =>
+                  bookmarkFetcher.submit(
+                    { intent: "bookmark", bookmarked: String(!isBookmarked) },
+                    { method: "post" }
+                  )
+                }
+              />
             )}
           </div>
 
@@ -651,6 +785,7 @@ function CurriculumSidebar({
   currentLessonId,
   lessonProgressMap,
   enrolled,
+  bookmarkedLessonIds,
 }: {
   course: { id: number; title: string; slug: string };
   curriculum: Array<{
@@ -661,6 +796,7 @@ function CurriculumSidebar({
   currentLessonId: number;
   lessonProgressMap: Record<number, string>;
   enrolled: boolean;
+  bookmarkedLessonIds: number[];
 }) {
   // Find which module the current lesson belongs to
   const currentModuleId = curriculum.find((m) =>
@@ -701,6 +837,9 @@ function CurriculumSidebar({
         <nav className="flex-1 p-2">
           {curriculum.map((mod) => {
             const isExpanded = expandedModules.has(mod.id);
+            const hasBookmarkedLesson = mod.lessons.some((lesson) =>
+              bookmarkedLessonIds.includes(lesson.id)
+            );
 
             return (
               <div key={mod.id} className="mb-1">
@@ -715,6 +854,7 @@ function CurriculumSidebar({
                     )}
                   />
                   <span className="flex-1 text-left">{mod.title}</span>
+                  {hasBookmarkedLesson && <Bookmark className="size-3.5 fill-yellow-400 text-yellow-500" />}
                 </button>
 
                 {isExpanded && (
@@ -750,6 +890,7 @@ function CurriculumSidebar({
                               <Circle className="size-3.5 shrink-0" />
                             )}
                             <span className="truncate">{l.title}</span>
+                            {bookmarkedLessonIds.includes(l.id) && <Bookmark className="ml-auto size-3.5 shrink-0 fill-yellow-400 text-yellow-500" />}
                           </Link>
                         </li>
                       );
@@ -762,6 +903,46 @@ function CurriculumSidebar({
         </nav>
       </div>
     </aside>
+  );
+}
+
+function BookmarkButton({
+  bookmarked,
+  canEdit,
+  isSaving,
+  onSubmit,
+}: {
+  bookmarked: boolean;
+  canEdit: boolean;
+  isSaving: boolean;
+  onSubmit: () => void;
+}) {
+  const [showHint, setShowHint] = useState(false);
+  const tooltip = "课程当前不可编辑书签";
+  if (!canEdit) {
+    return (
+      <span
+        tabIndex={0}
+        className="relative inline-flex"
+        onFocus={() => setShowHint(true)}
+        onBlur={() => setShowHint(false)}
+        onMouseEnter={() => setShowHint(true)}
+        onMouseLeave={() => setShowHint(false)}
+        onTouchStart={() => setShowHint((visible) => !visible)}
+      >
+        <Button variant="outline" size="sm" disabled aria-describedby="bookmark-read-only-hint">
+          <Bookmark className={cn("mr-1.5 size-4", bookmarked && "fill-yellow-400 text-yellow-500")} />
+          {bookmarked ? "Bookmarked" : "Bookmark"}
+        </Button>
+        {showHint && <span id="bookmark-read-only-hint" role="tooltip" className="absolute left-0 top-full z-10 mt-1 w-max rounded bg-foreground px-2 py-1 text-xs text-background">{tooltip}</span>}
+      </span>
+    );
+  }
+  return (
+    <Button variant="outline" size="sm" disabled={isSaving} onClick={onSubmit}>
+      <Bookmark className={cn("mr-1.5 size-4", bookmarked && "fill-yellow-400 text-yellow-500")} />
+      {bookmarked ? "Bookmarked" : "Bookmark"}
+    </Button>
   );
 }
 

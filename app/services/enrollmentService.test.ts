@@ -25,6 +25,7 @@ import {
   getCourseEnrolledStudents,
   markEnrollmentComplete,
 } from "./enrollmentService";
+import { saveLessonBookmark } from "./lessonBookmarkService";
 
 describe("enrollmentService", () => {
   beforeEach(() => {
@@ -84,7 +85,7 @@ describe("enrollmentService", () => {
     it("unenrolls a user from a course", () => {
       enrollUser(base.user.id, base.course.id, false, false);
 
-      const result = unenrollUser(base.user.id, base.course.id);
+      const result = unenrollUser({ userId: base.user.id, courseId: base.course.id });
       expect(result).toBeDefined();
       expect(result!.userId).toBe(base.user.id);
       expect(result!.courseId).toBe(base.course.id);
@@ -92,15 +93,34 @@ describe("enrollmentService", () => {
 
     it("throws when unenrolling a user who is not enrolled", () => {
       expect(() =>
-        unenrollUser(base.user.id, base.course.id)
+        unenrollUser({ userId: base.user.id, courseId: base.course.id })
       ).toThrowError("User is not enrolled in this course");
     });
 
     it("removes the enrollment from the database", () => {
       enrollUser(base.user.id, base.course.id, false, false);
-      unenrollUser(base.user.id, base.course.id);
+      unenrollUser({ userId: base.user.id, courseId: base.course.id });
 
       expect(isUserEnrolled(base.user.id, base.course.id)).toBe(false);
+    });
+
+    it("removes bookmarks when duplicate enrollments are removed", () => {
+      const module = testDb
+        .insert(schema.modules)
+        .values({ courseId: base.course.id, title: "Module", position: 1 })
+        .returning()
+        .get();
+      const lesson = testDb
+        .insert(schema.lessons)
+        .values({ moduleId: module.id, title: "Lesson", position: 1 })
+        .returning()
+        .get();
+      enrollUser(base.user.id, base.course.id, false, false);
+      enrollUser(base.user.id, base.course.id, false, true);
+      saveLessonBookmark({ lessonId: lesson.id, userId: base.user.id, bookmarked: true });
+
+      unenrollUser({ userId: base.user.id, courseId: base.course.id });
+      expect(testDb.select().from(schema.lessonBookmarks).all()).toEqual([]);
     });
   });
 
