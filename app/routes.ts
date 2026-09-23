@@ -46,6 +46,10 @@ export default [
   ]),
   route("signup", "routes/signup.tsx"),
   route("login", "routes/login.tsx"),
+  route(
+    "api/analytics/purchase-total",
+    "routes/api.analytics.purchase-total.ts"
+  ),
   route("api/switch-user", "routes/api.switch-user.ts"),
   route("api/logout", "routes/api.logout.ts"),
   route("api/video-tracking", "routes/api.video-tracking.ts"),
