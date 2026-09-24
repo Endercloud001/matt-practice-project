@@ -8,7 +8,6 @@ export function AnalyticsMetricCard({
   title,
   name,
   metric,
-  asOf,
   updating = false,
   stale = false,
   retryDisabled = false,
@@ -34,19 +33,25 @@ export function AnalyticsMetricCard({
         : name === "studentProgress"
           ? `${Math.round(metric.value)}%`
           : new Intl.NumberFormat("en-US").format(metric.value)
-      : metric.state === "empty"
-        ? metric.reason === "no_authorized_courses"
-          ? "暂无可查看的课程"
-          : name === "studentProgress" && courseScoped
-            ? "该课程暂无符合条件的学生"
-            : "所选期间暂无数据"
-        : metric.state === "unavailable"
-          ? metric.reason === "no_lessons"
-            ? "/ — No calculable lessons for eligible enrollments."
-            : name === "retentionRate"
-              ? "/ — 缺少活动记录，无法计算留存率"
-              : "/ — 缺少退款记录，无法计算净收入"
-          : "Unable to load this metric";
+      : metric.state === "error"
+        ? "Unable to load this metric"
+        : "/";
+  const explanation =
+    metric.state === "empty"
+      ? metric.reason === "no_authorized_courses"
+        ? "No courses available to view"
+        : name === "studentProgress" && courseScoped
+          ? "No eligible students in this course"
+          : "No data for the selected period"
+      : metric.state === "unavailable"
+        ? metric.reason === "no_lessons"
+          ? "No calculable lessons for eligible enrollments."
+          : name === "retentionRate"
+            ? "Retention rate is unavailable without activity records."
+            : "Net revenue is unavailable without refund records."
+        : metric.state === "error"
+          ? "The source data could not be read. Try again."
+          : null;
 
   return (
     <section
@@ -60,17 +65,6 @@ export function AnalyticsMetricCard({
         {title}
       </h2>
       <p className="mt-4 text-2xl font-semibold tracking-tight">{display}</p>
-      {name === "studentProgress" && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          Current learning snapshot of eligible enrollments, not a historical
-          trend or instructor teaching progress.
-        </p>
-      )}
-      {metric.state === "error" && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          The source data could not be read. Try again.
-        </p>
-      )}
       {metric.state === "error" && onRetry && (
         <button
           type="button"
@@ -81,23 +75,20 @@ export function AnalyticsMetricCard({
           Retry
         </button>
       )}
-      <p className="mt-auto pt-3 text-xs text-muted-foreground">
-        {updating ? (
-          "Updating this metric"
-        ) : stale ? (
-          "Updating · previous filter result"
-        ) : (
-          <time dateTime={asOf} title={asOf}>
-            As of{" "}
-            {new Date(asOf).toLocaleString("en-US", {
-              timeZone: "UTC",
-              dateStyle: "medium",
-              timeStyle: "medium",
-            })}{" "}
-            UTC
-          </time>
+      <div className="mt-auto space-y-2 pt-3 text-xs text-muted-foreground">
+        {name === "studentProgress" && (
+          <p>
+            Current learning snapshot of eligible enrollments, not a historical
+            trend or instructor teaching progress.
+          </p>
         )}
-      </p>
+        {explanation && <p>{explanation}</p>}
+        {updating ? (
+          <p>Updating this metric</p>
+        ) : stale ? (
+          <p>Updating · previous filter result</p>
+        ) : null}
+      </div>
     </section>
   );
 }

@@ -188,9 +188,9 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
       <AnalyticsFilters data={data} disabled={stale || retryPending} />
       {data.courses?.length === 0 && (
         <div className="rounded-lg border border-dashed p-6 text-center">
-          <p className="font-medium">暂无可查看的课程</p>
+          <p className="font-medium">No courses available to view</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            获批课程后，相关指标会显示在此处。
+            Metrics will appear here when you have access to courses.
           </p>
         </div>
       )}
@@ -236,8 +236,8 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           )}
           {data.studentProgress.state === "empty" && (
             <p className="text-sm text-muted-foreground">
-              该课程暂无符合条件的学生。Change the date range or return to the
-              overview.
+              No eligible students in this course. Change the date range or
+              return to the overview.
             </p>
           )}
         </div>

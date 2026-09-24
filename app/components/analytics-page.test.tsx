@@ -42,13 +42,13 @@ describe("analytics page presentation", () => {
       studentProgress: { state: "empty", reason: "no_records" },
     };
     const overview = renderPage(emptyData);
-    expect(overview).toContain("所选期间暂无数据");
-    expect(overview).not.toContain("暂无符合条件的学生");
+    expect(overview).toContain("No data for the selected period");
+    expect(overview).not.toContain("No eligible students");
     const course = renderPage(
       { ...emptyData, course: { id: 7, title: "Learning TypeScript" } },
       "/instructor/analytics/7"
     );
-    expect(course).toContain("该课程暂无符合条件的学生");
+    expect(course).toContain("No eligible students in this course");
   });
   it("keeps course identity and submitted dates when correcting invalid filters", () => {
     const markup = renderPage(

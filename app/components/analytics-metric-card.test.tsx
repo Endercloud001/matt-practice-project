@@ -49,8 +49,8 @@ describe("analytics metric card presentation", () => {
       state: "unavailable",
       reason: "no_lessons",
     });
-    expect(empty).toContain("暂无符合条件的学生");
-    expect(unavailable).toContain("/ — No calculable lessons");
+    expect(empty).toContain("No eligible students");
+    expect(unavailable).toContain("No calculable lessons");
     for (const markup of [empty, unavailable]) {
       expect(markup).not.toContain("0%");
       expect(markup).not.toContain('role="progressbar"');
@@ -84,8 +84,10 @@ describe("analytics metric card presentation", () => {
       />
     );
 
-    expect(noRecords).toContain("所选期间暂无数据");
-    expect(unavailable).toContain("缺少活动记录，无法计算留存率");
+    expect(noRecords).toContain("No data for the selected period");
+    expect(unavailable).toContain(
+      "Retention rate is unavailable without activity records."
+    );
     expect(error).toContain("Unable to load this metric");
     expect(error).toContain("The source data could not be read. Try again.");
     expect(error).toContain("Retry</button>");
