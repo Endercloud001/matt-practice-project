@@ -13,6 +13,7 @@ export function AnalyticsMetricCard({
   stale = false,
   retryDisabled = false,
   onRetry,
+  courseScoped = false,
 }: {
   title: string;
   name: AnalyticsMetricName;
@@ -22,6 +23,7 @@ export function AnalyticsMetricCard({
   stale?: boolean;
   retryDisabled?: boolean;
   onRetry?: () => void;
+  courseScoped?: boolean;
 }) {
   const display =
     metric.state === "value"
@@ -29,15 +31,21 @@ export function AnalyticsMetricCard({
         ? metric.value === 0
           ? "$0.00"
           : formatPrice(metric.value)
-        : new Intl.NumberFormat("en-US").format(metric.value)
+        : name === "studentProgress"
+          ? `${Math.round(metric.value)}%`
+          : new Intl.NumberFormat("en-US").format(metric.value)
       : metric.state === "empty"
         ? metric.reason === "no_authorized_courses"
           ? "暂无可查看的课程"
-          : "所选期间暂无数据"
+          : name === "studentProgress" && courseScoped
+            ? "该课程暂无符合条件的学生"
+            : "所选期间暂无数据"
         : metric.state === "unavailable"
-          ? name === "retentionRate"
-            ? "/ — 缺少活动记录，无法计算留存率"
-            : "/ — 缺少退款记录，无法计算净收入"
+          ? metric.reason === "no_lessons"
+            ? "/ — No calculable lessons for eligible enrollments."
+            : name === "retentionRate"
+              ? "/ — 缺少活动记录，无法计算留存率"
+              : "/ — 缺少退款记录，无法计算净收入"
           : "Unable to load this metric";
 
   return (
@@ -52,6 +60,12 @@ export function AnalyticsMetricCard({
         {title}
       </h2>
       <p className="mt-4 text-2xl font-semibold tracking-tight">{display}</p>
+      {name === "studentProgress" && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Current learning snapshot of eligible enrollments, not a historical
+          trend or instructor teaching progress.
+        </p>
+      )}
       {metric.state === "error" && (
         <p className="mt-2 text-sm text-muted-foreground">
           The source data could not be read. Try again.

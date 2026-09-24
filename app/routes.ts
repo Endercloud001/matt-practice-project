@@ -46,6 +46,10 @@ export default [
   ]),
   layout("routes/layout.analytics.tsx", [
     route("instructor/analytics", "routes/instructor.analytics.tsx"),
+    route(
+      "instructor/analytics/:courseId",
+      "routes/instructor.analytics.$courseId.tsx"
+    ),
   ]),
   route("signup", "routes/signup.tsx"),
   route("login", "routes/login.tsx"),

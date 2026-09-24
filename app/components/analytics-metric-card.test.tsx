@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { AnalyticsMetricCard } from "~/components/analytics-metric-card";
 
 describe("analytics metric card presentation", () => {
+  it("rounds student progress only for display and explains its current snapshot", () => {
+    const markup = renderToStaticMarkup(
+      <AnalyticsMetricCard
+        title="Average Student Learning Progress"
+        name="studentProgress"
+        metric={{ state: "value", value: 100 / 6 }}
+        asOf="2026-09-24T00:00:00.000Z"
+      />
+    );
+    expect(markup).toContain("17%");
+    expect(markup).toContain("Current learning snapshot");
+    expect(markup).toContain("not a historical trend");
+  });
+
   it("formats a genuine zero Purchase Total as currency zero", () => {
     const markup = renderToStaticMarkup(
       <AnalyticsMetricCard
@@ -14,6 +28,33 @@ describe("analytics metric card presentation", () => {
     );
     expect(markup).toContain("$0.00");
     expect(markup).not.toContain("Free");
+  });
+
+  it("distinguishes real zero progress, no eligible students and no lessons", () => {
+    const renderProgress = (
+      metric: Parameters<typeof AnalyticsMetricCard>[0]["metric"]
+    ) =>
+      renderToStaticMarkup(
+        <AnalyticsMetricCard
+          title="Course Average Student Learning Progress"
+          name="studentProgress"
+          courseScoped
+          metric={metric}
+          asOf="2026-09-24T00:00:00.000Z"
+        />
+      );
+    expect(renderProgress({ state: "value", value: 0 })).toContain("0%");
+    const empty = renderProgress({ state: "empty", reason: "no_records" });
+    const unavailable = renderProgress({
+      state: "unavailable",
+      reason: "no_lessons",
+    });
+    expect(empty).toContain("暂无符合条件的学生");
+    expect(unavailable).toContain("/ — No calculable lessons");
+    for (const markup of [empty, unavailable]) {
+      expect(markup).not.toContain("0%");
+      expect(markup).not.toContain('role="progressbar"');
+    }
   });
 
   it("shows distinct empty, unavailable and retryable error explanations", () => {

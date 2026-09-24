@@ -13,6 +13,8 @@ vi.mock("~/db", () => ({
 }));
 
 import {
+  analyticsMetricNames,
+  getCourseAnalytics,
   getAnalyticsOverview,
   getAnalyticsMetric,
   getPurchaseTotal,
@@ -45,11 +47,47 @@ function createCourse(instructorId: number, title: string) {
     .get();
 }
 
+function createStudent(name: string) {
+  return testDb
+    .insert(schema.users)
+    .values({
+      name,
+      email: `${name.toLowerCase().replaceAll(" ", "-")}@example.com`,
+      role: schema.UserRole.Student,
+    })
+    .returning()
+    .get();
+}
+
 function purchase(courseId: number, pricePaid: number, createdAt: string) {
   testDb
     .insert(schema.purchases)
     .values({ userId: base.user.id, courseId, pricePaid, createdAt })
     .run();
+}
+
+function createLessons(options: { courseId: number; count: number }) {
+  const courseModule = testDb
+    .insert(schema.modules)
+    .values({
+      courseId: options.courseId,
+      title: `Module ${options.courseId}`,
+      position: 1,
+    })
+    .returning()
+    .get();
+
+  return testDb
+    .insert(schema.lessons)
+    .values(
+      Array.from({ length: options.count }, (_, index) => ({
+        moduleId: courseModule.id,
+        title: `Lesson ${index + 1}`,
+        position: index + 1,
+      }))
+    )
+    .returning()
+    .all();
 }
 
 describe("analyticsService Purchase Total", () => {
@@ -411,5 +449,316 @@ describe("analyticsService Enrollment Count", () => {
       ok: true,
       result: { state: "value", value: 1 },
     });
+  });
+});
+
+describe("analyticsService Student Progress", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("pools student-lesson units across different course sizes at full precision", () => {
+    const secondCourse = createCourse(base.instructor.id, "Larger Course");
+    const firstLessons = createLessons({ courseId: base.course.id, count: 2 });
+    const secondLessons = createLessons({
+      courseId: secondCourse.id,
+      count: 4,
+    });
+    testDb
+      .insert(schema.enrollments)
+      .values([
+        { userId: base.user.id, courseId: base.course.id },
+        { userId: base.user.id, courseId: secondCourse.id },
+      ])
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values([
+        {
+          userId: base.user.id,
+          lessonId: firstLessons[0].id,
+          status: schema.LessonProgressStatus.Completed,
+        },
+        {
+          userId: base.user.id,
+          lessonId: secondLessons[0].id,
+          status: schema.LessonProgressStatus.Completed,
+        },
+      ])
+      .run();
+
+    const result = getAnalyticsOverview({ userId: base.instructor.id });
+
+    expect(result).toMatchObject({
+      ok: true,
+      studentProgress: { state: "value" },
+    });
+    if (result.ok && result.studentProgress.state === "value") {
+      expect(result.studentProgress.value).toBeCloseTo(100 / 3, 12);
+      expect(result.studentProgress.value).not.toBe(33);
+    }
+  });
+
+  it("returns course identity with its initial metrics in one authorized result", () => {
+    const [lesson] = createLessons({ courseId: base.course.id, count: 1 });
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values({
+        userId: base.user.id,
+        lessonId: lesson.id,
+        status: schema.LessonProgressStatus.Completed,
+      })
+      .run();
+
+    const result = getCourseAnalytics({
+      userId: base.instructor.id,
+      courseId: base.course.id,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      course: { id: base.course.id, title: base.course.title },
+      filters: { courseId: base.course.id },
+      enrollmentCount: { state: "value", value: 1 },
+      studentProgress: { state: "value", value: 100 },
+    });
+    expect(Date.parse(result.ok ? result.asOf : "")).not.toBeNaN();
+  });
+
+  it("filters current enrollments by the period before deduplicating them", () => {
+    const lessons = createLessons({ courseId: base.course.id, count: 2 });
+    const prePeriodStudent = createStudent("Pre Period");
+    const endBoundaryStudent = createStudent("End Boundary");
+    const removedStudent = createStudent("Removed Student");
+    testDb
+      .insert(schema.enrollments)
+      .values([
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-01T00:00:00.000Z",
+        },
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-05T00:00:00.000Z",
+        },
+        {
+          userId: prePeriodStudent.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-02-28T23:59:59.999Z",
+        },
+        {
+          userId: endBoundaryStudent.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-10T00:00:00.000Z",
+        },
+      ])
+      .run();
+    const removedEnrollment = testDb
+      .insert(schema.enrollments)
+      .values({
+        userId: removedStudent.id,
+        courseId: base.course.id,
+        enrolledAt: "2025-03-02T00:00:00.000Z",
+      })
+      .returning()
+      .get();
+    testDb
+      .insert(schema.lessonProgress)
+      .values([
+        {
+          userId: base.user.id,
+          lessonId: lessons[0].id,
+          status: schema.LessonProgressStatus.Completed,
+          completedAt: "2025-03-20T00:00:00.000Z",
+        },
+        ...[prePeriodStudent, endBoundaryStudent, removedStudent].flatMap(
+          (student) =>
+            lessons.map((lesson) => ({
+              userId: student.id,
+              lessonId: lesson.id,
+              status: schema.LessonProgressStatus.Completed,
+            }))
+        ),
+      ])
+      .run();
+    testDb
+      .delete(schema.enrollments)
+      .where(eq(schema.enrollments.id, removedEnrollment.id))
+      .run();
+
+    expect(
+      getAnalyticsOverview({
+        userId: base.instructor.id,
+        start: "2025-03-01T00:00:00.000Z",
+        end: "2025-03-10T00:00:00.000Z",
+      })
+    ).toMatchObject({
+      studentProgress: { state: "value", value: 50 },
+    });
+  });
+
+  it("counts each completed lesson once and only inside its actual course", () => {
+    const [firstLesson, secondLesson] = createLessons({
+      courseId: base.course.id,
+      count: 2,
+    });
+    const otherCourse = createCourse(base.instructor.id, "Other Course");
+    const [otherLesson] = createLessons({ courseId: otherCourse.id, count: 1 });
+    testDb
+      .insert(schema.enrollments)
+      .values([
+        { userId: base.user.id, courseId: base.course.id },
+        { userId: base.user.id, courseId: base.course.id },
+      ])
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values([
+        {
+          userId: base.user.id,
+          lessonId: firstLesson.id,
+          status: schema.LessonProgressStatus.Completed,
+        },
+        {
+          userId: base.user.id,
+          lessonId: firstLesson.id,
+          status: schema.LessonProgressStatus.Completed,
+        },
+        {
+          userId: base.user.id,
+          lessonId: secondLesson.id,
+          status: schema.LessonProgressStatus.InProgress,
+        },
+        {
+          userId: base.user.id,
+          lessonId: otherLesson.id,
+          status: schema.LessonProgressStatus.Completed,
+        },
+      ])
+      .run();
+
+    expect(
+      getAnalyticsOverview({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+      })
+    ).toMatchObject({ studentProgress: { state: "value", value: 50 } });
+  });
+
+  it("distinguishes no enrollments, no lessons, and genuine zero progress", () => {
+    expect(getAnalyticsOverview({ userId: base.instructor.id })).toMatchObject({
+      studentProgress: { state: "empty", reason: "no_records" },
+    });
+
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    expect(getAnalyticsOverview({ userId: base.instructor.id })).toMatchObject({
+      studentProgress: { state: "unavailable", reason: "no_lessons" },
+    });
+
+    createLessons({ courseId: base.course.id, count: 1 });
+    expect(getAnalyticsOverview({ userId: base.instructor.id })).toMatchObject({
+      studentProgress: { state: "value", value: 0 },
+    });
+  });
+
+  it("retries only Student progress and keeps local read failures safe", () => {
+    createLessons({ courseId: base.course.id, count: 1 });
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    testDb.$client.exec(
+      "ALTER TABLE lesson_progress RENAME TO unavailable_lesson_progress"
+    );
+
+    expect(getAnalyticsOverview({ userId: base.instructor.id })).toMatchObject({
+      enrollmentCount: { state: "value", value: 1 },
+      studentProgress: { state: "error", reason: "read_failed" },
+    });
+    const failedRetry = getAnalyticsMetric({
+      userId: base.instructor.id,
+      metric: "studentProgress",
+    });
+    expect(failedRetry).toMatchObject({
+      ok: true,
+      metric: "studentProgress",
+      result: { state: "error", reason: "read_failed" },
+    });
+    expect(failedRetry.ok && "enrollmentCount" in failedRetry).toBe(false);
+
+    testDb.$client.exec(
+      "ALTER TABLE unavailable_lesson_progress RENAME TO lesson_progress"
+    );
+    expect(
+      getAnalyticsMetric({
+        userId: base.instructor.id,
+        metric: "studentProgress",
+      })
+    ).toMatchObject({
+      result: { state: "value", value: 0 },
+    });
+    expect(analyticsMetricNames).toContain("studentProgress");
+  });
+
+  it("reauthorizes course analytics for deletion, ownership changes, and Admin", () => {
+    const otherInstructor = testDb
+      .insert(schema.users)
+      .values({
+        name: "Other Instructor",
+        email: "course-owner@example.com",
+        role: schema.UserRole.Instructor,
+      })
+      .returning()
+      .get();
+    const otherCourse = createCourse(otherInstructor.id, "Private Course");
+
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: otherCourse.id,
+      })
+    ).toEqual({ ok: false, error: "forbidden" });
+    expect(
+      getCourseAnalytics({
+        userId: createAdmin().id,
+        courseId: otherCourse.id,
+      })
+    ).toMatchObject({
+      ok: true,
+      course: { id: otherCourse.id, title: otherCourse.title },
+    });
+
+    testDb
+      .update(schema.courses)
+      .set({ instructorId: base.instructor.id })
+      .where(eq(schema.courses.id, otherCourse.id))
+      .run();
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: otherCourse.id,
+      })
+    ).toMatchObject({ ok: true, course: { id: otherCourse.id } });
+
+    testDb
+      .delete(schema.courses)
+      .where(eq(schema.courses.id, otherCourse.id))
+      .run();
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: otherCourse.id,
+      })
+    ).toEqual({ ok: false, error: "not_found" });
   });
 });

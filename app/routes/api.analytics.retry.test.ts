@@ -31,6 +31,23 @@ describe("analytics metric retry resource", () => {
     getCurrentUserId.mockResolvedValue(base.instructor.id);
   });
 
+  it("retries only course student progress with the exact date scope", async () => {
+    const response = await callLoader(
+      `?metric=studentProgress&courseId=${base.course.id}&range=custom&start=2026-09-01&end=2026-10-01&requestId=course-observation`
+    );
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      metric: "studentProgress",
+      result: { state: "empty", reason: "no_records" },
+      requestId: "course-observation",
+      scopeKey: `courseId=${base.course.id}&range=custom&start=2026-09-01&end=2026-10-01`,
+    });
+    expect(payload).not.toHaveProperty("enrollmentCount");
+    expect(payload).not.toHaveProperty("purchaseTotal");
+  });
+
   it("returns only the requested metric with its matching scope and request ID", async () => {
     testDb
       .insert(schema.enrollments)
