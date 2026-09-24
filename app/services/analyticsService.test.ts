@@ -12,7 +12,11 @@ vi.mock("~/db", () => ({
   },
 }));
 
-import { getPurchaseTotal } from "~/services/analyticsService";
+import {
+  getAnalyticsOverview,
+  getAnalyticsMetric,
+  getPurchaseTotal,
+} from "~/services/analyticsService";
 
 function createAdmin() {
   return testDb
@@ -191,6 +195,221 @@ describe("analyticsService Purchase Total", () => {
     expect(getPurchaseTotal({ userId: otherInstructor.id })).toMatchObject({
       ok: true,
       purchaseTotal: { state: "empty", reason: "no_authorized_courses" },
+    });
+  });
+});
+
+describe("analyticsService Enrollment Count", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("filters period boundaries before counting unique student-course relationships", () => {
+    const secondCourse = createCourse(
+      base.instructor.id,
+      "Second Analytics Course"
+    );
+    testDb
+      .insert(schema.enrollments)
+      .values([
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-01T00:00:00.000Z",
+        },
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-10T00:00:00.000Z",
+        },
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-10T00:00:00.000Z",
+        },
+        {
+          userId: base.user.id,
+          courseId: secondCourse.id,
+          enrolledAt: "2025-03-05T00:00:00.000Z",
+        },
+        {
+          userId: base.user.id,
+          courseId: secondCourse.id,
+          enrolledAt: "2025-03-15T00:00:00.000Z",
+        },
+      ])
+      .run();
+
+    expect(
+      getAnalyticsOverview({
+        userId: base.instructor.id,
+        start: "2025-03-05T00:00:00.000Z",
+        end: "2025-03-15T00:00:00.000Z",
+      })
+    ).toMatchObject({
+      ok: true,
+      enrollmentCount: { state: "value", value: 2 },
+    });
+  });
+
+  it("keeps Purchase Total available when the enrollment read fails", () => {
+    testDb
+      .insert(schema.purchases)
+      .values({
+        userId: base.user.id,
+        courseId: base.course.id,
+        pricePaid: 1250,
+        createdAt: "2025-03-10T00:00:00.000Z",
+      })
+      .run();
+    testDb.$client.exec(
+      "ALTER TABLE enrollments RENAME TO unavailable_enrollments"
+    );
+
+    const result = getAnalyticsOverview({ userId: base.instructor.id });
+
+    expect(result).toMatchObject({
+      ok: true,
+      purchaseTotal: { state: "value", value: 1250 },
+      enrollmentCount: { state: "error", reason: "read_failed" },
+    });
+    expect(Date.parse(result.ok ? result.asOf : "")).not.toBeNaN();
+  });
+
+  it("keeps Enrollment Count available when the purchase read fails", () => {
+    testDb
+      .insert(schema.enrollments)
+      .values({
+        userId: base.user.id,
+        courseId: base.course.id,
+        enrolledAt: "2025-03-10T00:00:00.000Z",
+      })
+      .run();
+    testDb.$client.exec(
+      "ALTER TABLE purchases RENAME TO unavailable_purchases"
+    );
+
+    expect(getAnalyticsOverview({ userId: base.instructor.id })).toMatchObject({
+      ok: true,
+      purchaseTotal: { state: "error", reason: "read_failed" },
+      enrollmentCount: { state: "value", value: 1 },
+    });
+  });
+
+  it("returns a successful no-course state and rejects Students for both operations", () => {
+    const instructorWithoutCourses = testDb
+      .insert(schema.users)
+      .values({
+        name: "Empty Instructor",
+        email: "empty-instructor@example.com",
+        role: schema.UserRole.Instructor,
+      })
+      .returning()
+      .get();
+
+    expect(
+      getAnalyticsOverview({ userId: instructorWithoutCourses.id })
+    ).toMatchObject({
+      ok: true,
+      purchaseTotal: { state: "empty", reason: "no_authorized_courses" },
+      enrollmentCount: { state: "empty", reason: "no_authorized_courses" },
+    });
+    expect(getAnalyticsOverview({ userId: base.user.id })).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(
+      getAnalyticsMetric({ userId: base.user.id, metric: "enrollmentCount" })
+    ).toEqual({ ok: false, error: "forbidden" });
+  });
+
+  it("retries only the requested enrollment metric and rechecks its scope", () => {
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    testDb.$client.exec(
+      "ALTER TABLE purchases RENAME TO unavailable_purchases"
+    );
+
+    const result = getAnalyticsMetric({
+      userId: base.instructor.id,
+      metric: "enrollmentCount",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      metric: "enrollmentCount",
+      result: { state: "value", value: 1 },
+    });
+    expect(result.ok && "purchaseTotal" in result).toBe(false);
+  });
+
+  it("blocks an explicit foreign course in overview and retry after ownership changes", () => {
+    const otherInstructor = testDb
+      .insert(schema.users)
+      .values({
+        name: "Other Instructor",
+        email: "other-instructor@example.com",
+        role: schema.UserRole.Instructor,
+      })
+      .returning()
+      .get();
+    const otherCourse = createCourse(
+      otherInstructor.id,
+      "Other Analytics Course"
+    );
+    testDb
+      .insert(schema.enrollments)
+      .values({
+        userId: base.user.id,
+        courseId: otherCourse.id,
+        enrolledAt: "2025-03-01T00:00:00.000Z",
+      })
+      .run();
+
+    expect(
+      getAnalyticsOverview({
+        userId: base.instructor.id,
+        courseId: otherCourse.id,
+      })
+    ).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(
+      getAnalyticsMetric({
+        userId: base.instructor.id,
+        courseId: otherCourse.id,
+        metric: "enrollmentCount",
+      })
+    ).toEqual({ ok: false, error: "forbidden" });
+
+    testDb
+      .update(schema.courses)
+      .set({ instructorId: base.instructor.id })
+      .where(eq(schema.courses.id, otherCourse.id))
+      .run();
+
+    expect(
+      getAnalyticsOverview({
+        userId: base.instructor.id,
+        courseId: otherCourse.id,
+      })
+    ).toMatchObject({
+      ok: true,
+      enrollmentCount: { state: "value", value: 1 },
+    });
+    expect(
+      getAnalyticsMetric({
+        userId: base.instructor.id,
+        courseId: otherCourse.id,
+        metric: "enrollmentCount",
+      })
+    ).toMatchObject({
+      ok: true,
+      result: { state: "value", value: 1 },
     });
   });
 });
