@@ -41,7 +41,17 @@ Headless Chromium against the isolated development database, desktop and 390px m
 
 Evidence and repeatable local browser scripts are outside the repository at `E:/analytics-worktrees/issue-8-acceptance`.
 
-Human screen-reader listening has not been performed. Keyboard pagination currently returns focus to the document body/top after navigation, recorded as a UX observation. Issue #8 remains open pending human review; no PR was published or issue closed.
+The user confirmed human acceptance passed on 2026-09-25 and authorized creating the Issue #8 PR without merging. No separate screen-reader listening result was supplied. Keyboard pagination currently returns focus to the document body/top after navigation, recorded as a UX observation. Issue #8 remains open until the PR is reviewed and merged.
+
+Publication-time verification reran the full suite (28 files, 470 tests) and typecheck successfully.
+
+### Screenshots
+
+These screenshots use synthetic acceptance students in the isolated local database.
+
+![Desktop student snapshots during update](issue-8-evidence/desktop-updating.png)
+
+![Mobile sticky Name and keyboard scrolling](issue-8-evidence/mobile-keyboard-scrolled.png)
 
 ## Manual entry
 
