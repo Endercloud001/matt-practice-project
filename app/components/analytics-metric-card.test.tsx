@@ -30,6 +30,21 @@ describe("analytics metric card presentation", () => {
     expect(markup).not.toContain("Free");
   });
 
+  it("formats best-attempt quiz scores as one decimal percentages", () => {
+    const renderScore = (value: number) =>
+      renderToStaticMarkup(
+        <AnalyticsMetricCard
+          title="Average Best-Attempt Quiz Score"
+          name="averageBestAttemptQuizScore"
+          metric={{ state: "value", value }}
+          asOf="2026-09-23T00:00:00.000Z"
+        />
+      );
+    expect(renderScore(0.5)).toContain("50.0%");
+    expect(renderScore(0)).toContain("0.0%");
+    expect(renderScore(0.12345)).toContain("12.3%");
+  });
+
   it("distinguishes real zero progress, no eligible students and no lessons", () => {
     const renderProgress = (
       metric: Parameters<typeof AnalyticsMetricCard>[0]["metric"]

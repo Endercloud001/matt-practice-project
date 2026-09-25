@@ -13,6 +13,9 @@ const data = {
   purchaseTotal: { state: "value", value: 0 },
   enrollmentCount: { state: "value", value: 1 },
   studentProgress: { state: "value", value: 100 / 6 },
+  averageBestAttemptQuizScore: { state: "value", value: 0.875 },
+  participatingStudents: { state: "value", value: 3 },
+  quizCount: { state: "value", value: 2 },
   retentionRate: { state: "unavailable", reason: "missing_source_data" },
   netRevenue: { state: "unavailable", reason: "missing_source_data" },
   range: "custom",
@@ -107,6 +110,10 @@ describe("analytics page presentation", () => {
       "/instructor/analytics/7"
     );
     expect(markup).toContain("Course Average Student Learning Progress");
+    expect(markup).toContain("Average Best-Attempt Quiz Score");
+    expect(markup).toContain("Participating Students");
+    expect(markup).toContain("Quizzes in Course");
+    expect(markup).toContain("87.5%");
     expect(markup).toContain("Course learning outcomes");
     expect(markup.indexOf("Learning TypeScript")).toBeLessThan(
       markup.indexOf("Start date")
@@ -119,11 +126,25 @@ describe("analytics page presentation", () => {
     );
     expect(markup).not.toContain("Retention Rate");
     expect(markup).not.toContain("Net Revenue");
-    expect(markup).not.toContain("Quiz Score");
     expect(markup).not.toContain('name="courseId"');
     expect(markup).toContain(
       'href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01"'
     );
+  });
+
+  it("preserves four-state quiz outcome semantics", () => {
+    const markup = renderPage(
+      {
+        ...data,
+        course: { id: 7, title: "Learning TypeScript" },
+        averageBestAttemptQuizScore: { state: "empty", reason: "no_attempts" },
+        participatingStudents: { state: "empty", reason: "no_records" },
+        quizCount: { state: "unavailable", reason: "no_quizzes" },
+      },
+      "/instructor/analytics/7"
+    );
+    expect(markup).toContain("No quiz attempts in the selected period");
+    expect(markup).toContain("No quizzes in this course.");
   });
 
   it("presents five named overview cards and a date-preserving course link", () => {

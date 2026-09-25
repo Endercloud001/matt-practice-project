@@ -278,20 +278,21 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
     );
   }
 
-  const renderMetric = (name: MetricName, title: string) => (
-    <RetryMetricCard
-      title={title}
-      name={name}
-      metric={data[name]}
-      asOf={data.asOf}
-      scopeKey={scopeKey}
-      stale={stale}
-      scopeGeneration={snapshotGeneration}
-      onNotice={reportNotice}
-      onScopeFailure={reportScopeFailure}
-      courseScoped={Boolean(course)}
-    />
-  );
+  const renderMetric = (name: MetricName, title: string) =>
+    data[name] ? (
+      <RetryMetricCard
+        title={title}
+        name={name}
+        metric={data[name]}
+        asOf={data.asOf}
+        scopeKey={scopeKey}
+        stale={stale}
+        scopeGeneration={snapshotGeneration}
+        onNotice={reportNotice}
+        onScopeFailure={reportScopeFailure}
+        courseScoped={Boolean(course)}
+      />
+    ) : null;
 
   return (
     <div className="space-y-6">
@@ -374,6 +375,14 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
             "studentProgress",
             "Course Average Student Learning Progress"
           )}
+          <div className="grid min-w-0 gap-4 sm:grid-cols-3">
+            {renderMetric(
+              "averageBestAttemptQuizScore",
+              "Average Best-Attempt Quiz Score"
+            )}
+            {renderMetric("participatingStudents", "Participating Students")}
+            {renderMetric("quizCount", "Quizzes in Course")}
+          </div>
           {data.studentProgress.state === "empty" && (
             <p className="text-sm text-muted-foreground">
               No eligible students in this course. Change the date range or

@@ -6,6 +6,8 @@ import {
   lessonProgress,
   lessons,
   modules,
+  quizzes,
+  quizAttempts,
   purchases,
   users,
   LessonProgressStatus,
@@ -40,8 +42,14 @@ export type AnalyticsOverviewOptions = PurchaseTotalOptions & {
 
 export type AnalyticsMetric<T> =
   | { state: "value"; value: T }
-  | { state: "empty"; reason: "no_records" | "no_authorized_courses" }
-  | { state: "unavailable"; reason: "missing_source_data" | "no_lessons" }
+  | {
+      state: "empty";
+      reason: "no_records" | "no_authorized_courses" | "no_attempts";
+    }
+  | {
+      state: "unavailable";
+      reason: "missing_source_data" | "no_lessons" | "no_quizzes";
+    }
   | { state: "error"; reason: "read_failed" };
 
 export const analyticsMetricNames = [
@@ -50,6 +58,9 @@ export const analyticsMetricNames = [
   "studentProgress",
   "retentionRate",
   "netRevenue",
+  "averageBestAttemptQuizScore",
+  "participatingStudents",
+  "quizCount",
 ] as const;
 export type AnalyticsMetricName = (typeof analyticsMetricNames)[number];
 
@@ -95,7 +106,12 @@ export type AnalyticsOverviewResult =
   | { ok: false; error: "forbidden" | "not_found" | "invalid_page" };
 
 export type CourseAnalyticsResult =
-  | (AnalyticsOverviewSuccess & { course: { id: number; title: string } })
+  | (AnalyticsOverviewSuccess & {
+      course: { id: number; title: string };
+      averageBestAttemptQuizScore: AnalyticsMetric<number>;
+      participatingStudents: AnalyticsMetric<number>;
+      quizCount: AnalyticsMetric<number>;
+    })
   | { ok: false; error: "forbidden" | "not_found" };
 
 export type AnalyticsMetricResult =
@@ -338,6 +354,147 @@ function readStudentProgress(
   };
 }
 
+type QuizAnalytics = {
+  averageBestAttemptQuizScore: AnalyticsMetric<number>;
+  participatingStudents: AnalyticsMetric<number>;
+  quizCount: AnalyticsMetric<number>;
+};
+
+export type StudentQuizAverageResult =
+  | { ok: true; result: AnalyticsMetric<number> }
+  | { ok: false; error: "forbidden" | "not_found" };
+
+function readQuizAnalytics(
+  tx: AnalyticsTransaction,
+  options: { courseIds: number[]; start?: string; end?: string }
+): QuizAnalytics {
+  const quizRows = tx
+    .select({ quizId: quizzes.id })
+    .from(quizzes)
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(inArray(modules.courseId, options.courseIds))
+    .all();
+  const quizCount = quizRows.length;
+  if (quizCount === 0) {
+    return {
+      averageBestAttemptQuizScore: {
+        state: "unavailable",
+        reason: "no_quizzes",
+      },
+      participatingStudents: { state: "empty", reason: "no_records" },
+      quizCount: { state: "value", value: 0 },
+    };
+  }
+  const conditions = [
+    inArray(
+      quizAttempts.quizId,
+      quizRows.map((row) => row.quizId)
+    ),
+  ];
+  if (options.start)
+    conditions.push(gte(quizAttempts.attemptedAt, options.start));
+  if (options.end) conditions.push(lt(quizAttempts.attemptedAt, options.end));
+  const attempts = tx
+    .select({
+      userId: quizAttempts.userId,
+      quizId: quizAttempts.quizId,
+      score: sql<number>`max(${quizAttempts.score})`,
+    })
+    .from(quizAttempts)
+    .where(and(...conditions))
+    .groupBy(quizAttempts.userId, quizAttempts.quizId)
+    .all();
+  if (attempts.length === 0) {
+    return {
+      averageBestAttemptQuizScore: { state: "empty", reason: "no_attempts" },
+      participatingStudents: { state: "empty", reason: "no_records" },
+      quizCount: { state: "value", value: quizCount },
+    };
+  }
+  const students = new Set<number>();
+  for (const attempt of attempts) {
+    students.add(attempt.userId);
+  }
+  const byQuiz = new Map<number, number[]>();
+  for (const { quizId, score } of attempts) {
+    const values = byQuiz.get(quizId) ?? [];
+    values.push(score);
+    byQuiz.set(quizId, values);
+  }
+  const quizMeans = [...byQuiz.values()].map(
+    (scores) => scores.reduce((a, b) => a + b, 0) / scores.length
+  );
+  return {
+    averageBestAttemptQuizScore: {
+      state: "value",
+      value: quizMeans.reduce((a, b) => a + b, 0) / quizMeans.length,
+    },
+    participatingStudents: { state: "value", value: students.size },
+    quizCount: { state: "value", value: quizCount },
+  };
+}
+
+function readStudentQuizAverage(
+  tx: AnalyticsTransaction,
+  options: { courseId: number; studentId: number; start?: string; end?: string }
+): AnalyticsMetric<number> {
+  const quizRows = tx
+    .select({ quizId: quizzes.id })
+    .from(quizzes)
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, options.courseId))
+    .all();
+  if (quizRows.length === 0)
+    return { state: "unavailable", reason: "no_quizzes" };
+  const conditions = [
+    eq(quizAttempts.userId, options.studentId),
+    inArray(
+      quizAttempts.quizId,
+      quizRows.map((row) => row.quizId)
+    ),
+  ];
+  if (options.start)
+    conditions.push(gte(quizAttempts.attemptedAt, options.start));
+  if (options.end) conditions.push(lt(quizAttempts.attemptedAt, options.end));
+  const rows = tx
+    .select({ score: sql<number>`max(${quizAttempts.score})` })
+    .from(quizAttempts)
+    .where(and(...conditions))
+    .groupBy(quizAttempts.quizId)
+    .all();
+  if (rows.length === 0) return { state: "empty", reason: "no_attempts" };
+  return {
+    state: "value",
+    value: rows.reduce((sum, row) => sum + row.score, 0) / rows.length,
+  };
+}
+
+export function getStudentQuizAverage(options: {
+  userId: number;
+  courseId: number;
+  studentId: number;
+  start?: string;
+  end?: string;
+}): StudentQuizAverageResult {
+  return db.transaction((tx) => {
+    const scope = getAuthorizedScope(tx, options);
+    if (!scope.ok) return scope;
+    if (!scope.courses.some((course) => course.id === options.courseId))
+      return { ok: false, error: "forbidden" };
+    return {
+      ok: true,
+      result: readStudentQuizAverage(tx, {
+        courseId: options.courseId,
+        studentId: options.studentId,
+        start: options.start,
+        end: options.end,
+      }),
+    };
+  });
+}
+
 export function getAnalyticsMetric(options: {
   userId: number;
   metric: AnalyticsMetricName;
@@ -367,6 +524,34 @@ export function getAnalyticsMetric(options: {
         metric: options.metric,
         result: { state: "empty", reason: "no_authorized_courses" },
       };
+    }
+
+    if (
+      options.metric === "averageBestAttemptQuizScore" ||
+      options.metric === "participatingStudents" ||
+      options.metric === "quizCount"
+    ) {
+      try {
+        const quiz = readQuizAnalytics(tx, {
+          courseIds: scope.courses.map((course) => course.id),
+          start: options.start,
+          end: options.end,
+        });
+        const result =
+          options.metric === "averageBestAttemptQuizScore"
+            ? quiz.averageBestAttemptQuizScore
+            : options.metric === "participatingStudents"
+              ? quiz.participatingStudents
+              : quiz.quizCount;
+        return { ok: true, asOf, metric: options.metric, result };
+      } catch {
+        return {
+          ok: true,
+          asOf,
+          metric: options.metric,
+          result: { state: "error", reason: "read_failed" },
+        };
+      }
     }
 
     try {
@@ -746,9 +931,28 @@ export function getCourseAnalytics(
     const course = scope.courses[0];
     if (!course) return { ok: false, error: "not_found" };
 
+    let quiz: QuizAnalytics;
+    try {
+      quiz = readQuizAnalytics(tx, {
+        courseIds: [course.id],
+        start: options.start,
+        end: options.end,
+      });
+    } catch {
+      const failed: AnalyticsMetric<number> = {
+        state: "error",
+        reason: "read_failed",
+      };
+      quiz = {
+        averageBestAttemptQuizScore: failed,
+        participatingStudents: failed,
+        quizCount: failed,
+      };
+    }
     return {
       ...readAnalyticsOverview(tx, scope, options),
       course,
+      ...quiz,
     };
   });
 }

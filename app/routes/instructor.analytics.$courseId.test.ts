@@ -52,6 +52,46 @@ describe("course analytics loader", () => {
     expect(JSON.stringify(payload)).not.toContain(base.user.name);
   });
 
+  it("exposes quiz outcome metrics through the course loader", async () => {
+    const courseModule = testDb
+      .insert(schema.modules)
+      .values({ courseId: base.course.id, title: "Quiz Module", position: 1 })
+      .returning()
+      .get();
+    const lesson = testDb
+      .insert(schema.lessons)
+      .values({ moduleId: courseModule.id, title: "Quiz Lesson", position: 1 })
+      .returning()
+      .get();
+    const quiz = testDb
+      .insert(schema.quizzes)
+      .values({ lessonId: lesson.id, title: "Outcome Quiz", passingScore: 0.7 })
+      .returning()
+      .get();
+    testDb
+      .insert(schema.quizAttempts)
+      .values({
+        userId: base.user.id,
+        quizId: quiz.id,
+        score: 0.6,
+        passed: false,
+        attemptedAt: "2026-09-10T00:00:00.000Z",
+      })
+      .run();
+
+    const response = await callLoader({
+      query: "?range=custom&start=2026-09-01&end=2026-10-01",
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      course: { id: base.course.id },
+      averageBestAttemptQuizScore: { state: "value", value: 0.6 },
+      participatingStudents: { state: "value", value: 1 },
+      quizCount: { state: "value", value: 1 },
+    });
+  });
+
   it("requires a session and Instructor or Admin access", async () => {
     getCurrentUserId.mockResolvedValueOnce(null);
     const anonymous = await callLoader();
