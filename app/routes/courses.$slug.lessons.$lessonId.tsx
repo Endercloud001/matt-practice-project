@@ -934,7 +934,7 @@ function BookmarkButton({
   onSubmit: () => void;
 }) {
   const [showHint, setShowHint] = useState(false);
-  const tooltip = "课程当前不可编辑书签";
+  const tooltip = "Bookmarks cannot be edited for this course right now.";
   if (!canEdit) {
     return (
       <span

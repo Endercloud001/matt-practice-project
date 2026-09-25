@@ -15,6 +15,7 @@ import {
   Sun,
   LogOut,
   Settings,
+  ChartColumnIncreasing,
 } from "lucide-react";
 
 interface CurrentUser {
@@ -65,6 +66,12 @@ const navItems: NavItem[] = [
     to: "/instructor",
     icon: <GraduationCap className="size-4" />,
     roles: [UserRole.Instructor],
+  },
+  {
+    label: "Analytics",
+    to: "/instructor/analytics",
+    icon: <ChartColumnIncreasing className="size-4" />,
+    roles: [UserRole.Instructor, UserRole.Admin],
   },
   {
     label: "Manage Users",

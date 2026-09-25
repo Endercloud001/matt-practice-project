@@ -44,8 +44,24 @@ export default [
     route("team", "routes/team.tsx"),
     route("redeem/:code", "routes/redeem.$code.tsx"),
   ]),
+  layout("routes/layout.analytics.tsx", [
+    route("instructor/analytics", "routes/instructor.analytics.tsx"),
+    route(
+      "instructor/analytics/:courseId",
+      "routes/instructor.analytics.$courseId.tsx"
+    ),
+  ]),
   route("signup", "routes/signup.tsx"),
   route("login", "routes/login.tsx"),
+  route(
+    "api/analytics/purchase-total",
+    "routes/api.analytics.purchase-total.ts"
+  ),
+  route("api/analytics/retry", "routes/api.analytics.retry.ts"),
+  route(
+    "api/analytics/students/retry",
+    "routes/api.analytics.students.retry.ts"
+  ),
   route("api/switch-user", "routes/api.switch-user.ts"),
   route("api/logout", "routes/api.logout.ts"),
   route("api/video-tracking", "routes/api.video-tracking.ts"),
