@@ -43,14 +43,16 @@ function SummaryMetric({
 
 function CourseSummaries({ data }: { data: AnalyticsPageData }) {
   const summaries = data.courseSummaries;
+  const location = useLocation();
   if (!summaries) return null;
-  const dateParams = new URLSearchParams();
-  for (const name of ["range", "start", "end"]) {
-    const value = new URLSearchParams(useLocation().search).get(name);
-    if (value) dateParams.set(name, value);
+  const currentParams = new URLSearchParams(location.search);
+  const scopeParams = new URLSearchParams();
+  for (const name of ["range", "start", "end", "instructorId", "courseId"]) {
+    const value = currentParams.get(name);
+    if (value) scopeParams.set(name, value);
   }
   const pageHref = (page: number) => {
-    const params = new URLSearchParams(dateParams);
+    const params = new URLSearchParams(scopeParams);
     if (page > 1) params.set("coursePage", String(page));
     return `/instructor/analytics?${params}`;
   };
@@ -64,46 +66,40 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
           No courses available to compare.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full min-w-[42rem] text-left text-sm">
-            <caption className="sr-only">Course summary comparison</caption>
-            <thead className="bg-muted/40">
-              <tr>
-                <th className="p-3 font-medium">Course</th>
-                <th className="p-3 font-medium">Purchase Total</th>
-                <th className="p-3 font-medium">Enrollment Count</th>
-                <th className="p-3 font-medium">
+        <div className="space-y-3">
+          {summaries.rows.map((row) => (
+            <article
+              key={row.id}
+              className="grid gap-2 rounded-xl border p-4 sm:grid-cols-4 sm:items-center"
+            >
+              <h3 className="font-medium">
+                <a
+                  className="underline hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  href={`/instructor/analytics/${row.id}?${new URLSearchParams([...scopeParams].filter(([key]) => key !== "courseId"))}`}
+                >
+                  {row.title}
+                </a>
+              </h3>
+              <p>
+                <span className="block text-xs text-muted-foreground">
+                  Purchase Total
+                </span>
+                <SummaryMetric metric={row.purchaseTotal} kind="price" />
+              </p>
+              <p>
+                <span className="block text-xs text-muted-foreground">
+                  Enrollment Count
+                </span>
+                <SummaryMetric metric={row.enrollmentCount} kind="number" />
+              </p>
+              <p>
+                <span className="block text-xs text-muted-foreground">
                   Average Student Learning Progress
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {summaries.rows.map((row) => (
-                <tr key={row.id} className="border-t">
-                  <th scope="row" className="p-3 font-medium">
-                    <a
-                      className="underline hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                      href={`/instructor/analytics/${row.id}?${dateParams}`}
-                    >
-                      {row.title}
-                    </a>
-                  </th>
-                  <td className="p-3">
-                    <SummaryMetric metric={row.purchaseTotal} kind="price" />
-                  </td>
-                  <td className="p-3">
-                    <SummaryMetric metric={row.enrollmentCount} kind="number" />
-                  </td>
-                  <td className="p-3">
-                    <SummaryMetric
-                      metric={row.studentProgress}
-                      kind="percent"
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                </span>
+                <SummaryMetric metric={row.studentProgress} kind="percent" />
+              </p>
+            </article>
+          ))}
         </div>
       )}
       {summaries.totalPages > 1 && (
@@ -113,6 +109,7 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
         >
           {summaries.page > 1 ? (
             <a
+              aria-label={`Go to page ${summaries.page - 1}`}
               className="rounded-md border px-3 py-2 underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               href={pageHref(summaries.page - 1)}
             >
@@ -131,6 +128,7 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
           </span>
           {summaries.page < summaries.totalPages ? (
             <a
+              aria-label={`Go to page ${summaries.page + 1}`}
               className="rounded-md border px-3 py-2 underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               href={pageHref(summaries.page + 1)}
             >
@@ -344,7 +342,6 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           }
         </a>
       )}
-      {!course && <CourseSummaries data={data} />}
       <div
         className={cn(
           "grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2",
@@ -364,6 +361,7 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           </>
         )}
       </div>
+      {!course && <CourseSummaries data={data} />}
       {course && (
         <div className="space-y-3" aria-labelledby="learning-outcomes-title">
           <h2 id="learning-outcomes-title" className="text-xl font-semibold">
