@@ -332,7 +332,15 @@ export function AnalyticsStudentTable({
                   <>
                     <span>
                       {columnTitles[metric]}: Unable to load student metrics.
+                      {metric === "studentProgress"
+                        ? " Student progress could not be read. Other metrics retain their existing results."
+                        : " Quiz results could not be read. Other metrics retain their existing results."}
                     </span>
+                    {fetcher.state !== "idle" && request?.metric === metric && (
+                      <span>
+                        Updating this column · Other values remain unchanged.
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => retryColumn(metric)}
