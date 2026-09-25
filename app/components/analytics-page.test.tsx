@@ -158,7 +158,7 @@ describe("analytics page presentation", () => {
     expect(markup).toContain('aria-label="Course summaries pagination"');
     expect(markup).toContain("Page 2 of 2");
     expect(markup).toContain(
-      'href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01"'
+      'href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01&amp;courseId=7"'
     );
     expect(markup).toContain('aria-disabled="true"');
   });
