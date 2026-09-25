@@ -139,6 +139,8 @@ describe("analytics page presentation", () => {
     }
     expect(markup.match(/<section/g)).toHaveLength(6);
     expect(markup).toContain("17%");
+    expect(markup).toContain("$0.00");
+    expect(markup).not.toContain("Free");
     expect(markup).toContain(
       "/instructor/analytics/7?range=custom&amp;start=2026-09-01&amp;end=2026-10-01"
     );
@@ -161,5 +163,42 @@ describe("analytics page presentation", () => {
       'href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01&amp;courseId=7"'
     );
     expect(markup).toContain('aria-disabled="true"');
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1);
+  });
+
+  it("explains summary states and offers recovery from an empty out-of-range page", () => {
+    const markup = renderPage({
+      ...data,
+      courseSummaries: {
+        ...data.courseSummaries,
+        rows: [],
+        page: 2,
+        totalCount: 1,
+        totalPages: 1,
+      },
+    });
+    expect(markup).toContain("No courses available to compare.");
+    expect(markup).toContain('aria-label="Go to page 1"');
+    expect(markup).toContain(
+      'href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01&amp;courseId=7"'
+    );
+
+    const states = renderPage({
+      ...data,
+      courseSummaries: {
+        ...data.courseSummaries,
+        rows: [
+          {
+            ...data.courseSummaries.rows[0],
+            purchaseTotal: { state: "empty", reason: "no_records" },
+            enrollmentCount: { state: "unavailable", reason: "no_lessons" },
+            studentProgress: { state: "error", reason: "read_failed" },
+          },
+        ],
+      },
+    });
+    expect(states).toContain("No records for the selected period");
+    expect(states).toContain("Unavailable for the selected data");
+    expect(states).toContain("Unable to load this metric");
   });
 });

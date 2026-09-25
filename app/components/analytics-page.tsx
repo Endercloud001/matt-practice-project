@@ -22,21 +22,23 @@ function SummaryMetric({
   metric: AnalyticsMetric<number>;
   kind: "price" | "number" | "percent";
 }) {
-  if (metric.state !== "value")
+  if (metric.state !== "value") {
+    const explanation =
+      metric.state === "empty"
+        ? "No records for the selected period"
+        : metric.state === "unavailable"
+          ? "Unavailable for the selected data"
+          : "Unable to load this metric";
     return (
-      <span
-        title={
-          metric.state === "empty"
-            ? "No records"
-            : metric.state === "unavailable"
-              ? "Unavailable"
-              : "Unable to load"
-        }
-      >
-        /
+      <span>
+        / <span className="sr-only">({explanation})</span>
       </span>
     );
-  if (kind === "price") return <span>{formatPrice(metric.value)}</span>;
+  }
+  if (kind === "price")
+    return (
+      <span>{metric.value === 0 ? "$0.00" : formatPrice(metric.value)}</span>
+    );
   if (kind === "percent") return <span>{Math.round(metric.value)}%</span>;
   return <span>{metric.value}</span>;
 }
@@ -102,7 +104,8 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
           ))}
         </div>
       )}
-      {summaries.totalPages > 1 && (
+      {(summaries.totalPages > 1 ||
+        (summaries.rows.length === 0 && summaries.page > 1)) && (
         <nav
           aria-label="Course summaries pagination"
           className="flex items-center justify-between gap-3 text-sm"
@@ -123,7 +126,7 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
               Previous
             </span>
           )}
-          <span aria-live="polite">
+          <span>
             Page {summaries.page} of {summaries.totalPages}
           </span>
           {summaries.page < summaries.totalPages ? (
