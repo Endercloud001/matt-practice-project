@@ -1,4 +1,4 @@
-import { formatPrice } from "~/lib/utils";
+import { cn, formatPrice } from "~/lib/utils";
 import type {
   AnalyticsMetric,
   AnalyticsMetricName,
@@ -13,6 +13,9 @@ export function AnalyticsMetricCard({
   retryDisabled = false,
   onRetry,
   courseScoped = false,
+  compact = false,
+  idPrefix = "",
+  retryLabel,
 }: {
   title: string;
   name: AnalyticsMetricName;
@@ -23,7 +26,12 @@ export function AnalyticsMetricCard({
   retryDisabled?: boolean;
   onRetry?: () => void;
   courseScoped?: boolean;
+  compact?: boolean;
+  idPrefix?: string;
+  retryLabel?: string;
 }) {
+  const Container = compact ? "div" : "section";
+  const Heading = compact ? "h4" : "h2";
   const display =
     metric.state === "value"
       ? name === "purchaseTotal"
@@ -60,20 +68,31 @@ export function AnalyticsMetricCard({
           : null;
 
   return (
-    <section
-      className="flex min-h-40 flex-col rounded-xl border bg-card p-5 shadow-sm"
-      aria-labelledby={`${name}-title`}
+    <Container
+      className={cn(
+        "flex flex-col",
+        !compact && "min-h-40 rounded-xl border bg-card p-5 shadow-sm"
+      )}
+      aria-labelledby={`${idPrefix}${name}-title`}
     >
-      <h2
-        id={`${name}-title`}
-        className="text-sm font-medium text-muted-foreground"
+      <Heading
+        id={`${idPrefix}${name}-title`}
+        className={cn(
+          "text-muted-foreground",
+          compact ? "text-xs" : "text-sm font-medium"
+        )}
       >
         {title}
-      </h2>
-      <p className="mt-4 text-2xl font-semibold tracking-tight">{display}</p>
+      </Heading>
+      <p
+        className={cn(!compact && "mt-4 text-2xl font-semibold tracking-tight")}
+      >
+        {display}
+      </p>
       {metric.state === "error" && onRetry && (
         <button
           type="button"
+          aria-label={retryLabel}
           onClick={onRetry}
           disabled={retryDisabled}
           className="mt-auto self-start rounded-md px-2 py-1 text-sm font-medium text-primary underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
@@ -81,8 +100,13 @@ export function AnalyticsMetricCard({
           Retry
         </button>
       )}
-      <div className="mt-auto space-y-2 pt-3 text-xs text-muted-foreground">
-        {name === "studentProgress" && (
+      <div
+        className={cn(
+          "space-y-2 text-xs text-muted-foreground",
+          !compact && "mt-auto pt-3"
+        )}
+      >
+        {name === "studentProgress" && !compact && (
           <p>
             Current learning snapshot of eligible enrollments, not a historical
             trend or instructor teaching progress.
@@ -95,6 +119,6 @@ export function AnalyticsMetricCard({
           <p>Updating · previous filter result</p>
         ) : null}
       </div>
-    </section>
+    </Container>
   );
 }

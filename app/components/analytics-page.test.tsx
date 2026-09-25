@@ -364,8 +364,12 @@ describe("analytics page presentation", () => {
         ],
       },
     });
-    expect(states).toContain("No records for the selected period");
-    expect(states).toContain("Unavailable for the selected data");
+    expect(states).toContain("No data for the selected period");
+    expect(states).toContain("No calculable lessons for eligible enrollments.");
     expect(states).toContain("Unable to load this metric");
+    expect(states).toContain("The source data could not be read. Try again.");
+    expect(states).toContain(
+      'aria-label="Retry Learning TypeScript: Average Student Learning Progress"'
+    );
   });
 });

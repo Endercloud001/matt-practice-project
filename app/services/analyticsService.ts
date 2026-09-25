@@ -396,17 +396,21 @@ export type StudentQuizAverageResult =
   | { ok: true; result: AnalyticsMetric<number> }
   | { ok: false; error: "forbidden" | "not_found" };
 
-function readQuizAnalytics(
-  tx: AnalyticsTransaction,
-  options: { courseIds: number[]; start?: string; end?: string }
-): QuizAnalytics {
-  const quizRows = tx
+function readCourseQuizzes(tx: AnalyticsTransaction, courseIds: number[]) {
+  return tx
     .select({ quizId: quizzes.id })
     .from(quizzes)
     .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
-    .where(inArray(modules.courseId, options.courseIds))
+    .where(inArray(modules.courseId, courseIds))
     .all();
+}
+
+function readQuizAnalytics(
+  tx: AnalyticsTransaction,
+  options: { courseIds: number[]; start?: string; end?: string }
+): QuizAnalytics {
+  const quizRows = readCourseQuizzes(tx, options.courseIds);
   const quizCount = quizRows.length;
   if (quizCount === 0) {
     return {
@@ -564,17 +568,48 @@ export function getAnalyticsMetric(options: {
       options.metric === "quizCount"
     ) {
       try {
+        const courseIds = scope.courses.map((course) => course.id);
+        if (options.metric === "quizCount") {
+          return {
+            ok: true,
+            asOf,
+            metric: options.metric,
+            result: {
+              state: "value",
+              value: readCourseQuizzes(tx, courseIds).length,
+            },
+          };
+        }
+        if (options.metric === "participatingStudents") {
+          const conditions = [inArray(modules.courseId, courseIds)];
+          if (options.start)
+            conditions.push(gte(quizAttempts.attemptedAt, options.start));
+          if (options.end)
+            conditions.push(lt(quizAttempts.attemptedAt, options.end));
+          const students = tx
+            .selectDistinct({ userId: quizAttempts.userId })
+            .from(quizAttempts)
+            .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+            .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+            .innerJoin(modules, eq(lessons.moduleId, modules.id))
+            .where(and(...conditions))
+            .all();
+          return {
+            ok: true,
+            asOf,
+            metric: options.metric,
+            result:
+              students.length > 0
+                ? { state: "value", value: students.length }
+                : { state: "empty", reason: "no_records" },
+          };
+        }
         const quiz = readQuizAnalytics(tx, {
-          courseIds: scope.courses.map((course) => course.id),
+          courseIds,
           start: options.start,
           end: options.end,
         });
-        const result =
-          options.metric === "averageBestAttemptQuizScore"
-            ? quiz.averageBestAttemptQuizScore
-            : options.metric === "participatingStudents"
-              ? quiz.participatingStudents
-              : quiz.quizCount;
+        const result = quiz.averageBestAttemptQuizScore;
         return { ok: true, asOf, metric: options.metric, result };
       } catch {
         return {

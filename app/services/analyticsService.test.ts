@@ -61,7 +61,15 @@ function createStudent(name: string) {
     .get();
 }
 
-function purchase(courseId: number, pricePaid: number, createdAt: string) {
+function purchase({
+  courseId,
+  pricePaid,
+  createdAt,
+}: {
+  courseId: number;
+  pricePaid: number;
+  createdAt: string;
+}) {
   testDb
     .insert(schema.purchases)
     .values({ userId: base.user.id, courseId, pricePaid, createdAt })
@@ -125,9 +133,21 @@ describe("analyticsService Purchase Total", () => {
   });
 
   it("sums each purchase row once within an inclusive-start exclusive-end UTC period", () => {
-    purchase(base.course.id, 1250, "2025-03-01T00:00:00.000Z");
-    purchase(base.course.id, 1250, "2025-03-15T23:59:59.999Z");
-    purchase(base.course.id, 9999, "2025-03-16T00:00:00.000Z");
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 1250,
+      createdAt: "2025-03-01T00:00:00.000Z",
+    });
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 1250,
+      createdAt: "2025-03-15T23:59:59.999Z",
+    });
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 9999,
+      createdAt: "2025-03-16T00:00:00.000Z",
+    });
 
     expect(
       getPurchaseTotal({
@@ -143,14 +163,26 @@ describe("analyticsService Purchase Total", () => {
   });
 
   it("counts separate identical purchases and distinguishes recorded zero from no purchases", () => {
-    purchase(base.course.id, 800, "2025-03-01T12:00:00.000Z");
-    purchase(base.course.id, 800, "2025-03-01T12:00:00.000Z");
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 800,
+      createdAt: "2025-03-01T12:00:00.000Z",
+    });
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 800,
+      createdAt: "2025-03-01T12:00:00.000Z",
+    });
     expect(getPurchaseTotal({ userId: base.instructor.id })).toMatchObject({
       purchaseTotal: { state: "value", cents: 1600 },
     });
 
     testDb.delete(schema.purchases).run();
-    purchase(base.course.id, 0, "2025-03-01T12:00:00.000Z");
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 0,
+      createdAt: "2025-03-01T12:00:00.000Z",
+    });
     expect(getPurchaseTotal({ userId: base.instructor.id })).toMatchObject({
       purchaseTotal: { state: "value", cents: 0 },
     });
@@ -172,8 +204,16 @@ describe("analyticsService Purchase Total", () => {
       .returning()
       .get();
     const otherCourse = createCourse(secondInstructor.id, "Other Course");
-    purchase(base.course.id, 100, "2025-03-01T12:00:00.000Z");
-    purchase(otherCourse.id, 300, "2025-03-01T12:00:00.000Z");
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 100,
+      createdAt: "2025-03-01T12:00:00.000Z",
+    });
+    purchase({
+      courseId: otherCourse.id,
+      pricePaid: 300,
+      createdAt: "2025-03-01T12:00:00.000Z",
+    });
 
     expect(getPurchaseTotal({ userId: base.instructor.id })).toMatchObject({
       purchaseTotal: { cents: 100 },
@@ -198,8 +238,16 @@ describe("analyticsService Purchase Total", () => {
       .returning()
       .get();
     const otherCourse = createCourse(secondInstructor.id, "Other Course");
-    purchase(base.course.id, 100, "2025-03-01T12:00:00.000Z");
-    purchase(otherCourse.id, 900, "2025-03-01T12:00:00.000Z");
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 100,
+      createdAt: "2025-03-01T12:00:00.000Z",
+    });
+    purchase({
+      courseId: otherCourse.id,
+      pricePaid: 900,
+      createdAt: "2025-03-01T12:00:00.000Z",
+    });
 
     expect(
       getPurchaseTotal({
@@ -797,6 +845,40 @@ describe("analyticsService quiz outcomes", () => {
     base = seedBaseData(testDb);
   });
 
+  it("retries quiz count without depending on unavailable attempt data", () => {
+    const lessons = createLessons({ courseId: base.course.id, count: 1 });
+    createQuiz(lessons[0].id, "Count despite unavailable attempts");
+    testDb.$client.exec(
+      "ALTER TABLE quiz_attempts RENAME TO unavailable_attempts"
+    );
+    expect(
+      getAnalyticsMetric({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+        metric: "quizCount",
+      })
+    ).toMatchObject({ ok: true, result: { state: "value", value: 1 } });
+  });
+
+  it("retries participation without depending on unavailable score data", () => {
+    const lessons = createLessons({ courseId: base.course.id, count: 1 });
+    const quiz = createQuiz(
+      lessons[0].id,
+      "Participation despite unavailable scores"
+    );
+    attempt({ userId: base.user.id, quizId: quiz.id, score: 0.5 });
+    testDb.$client.exec(
+      "ALTER TABLE quiz_attempts RENAME COLUMN score TO unavailable_score"
+    );
+    expect(
+      getAnalyticsMetric({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+        metric: "participatingStudents",
+      })
+    ).toMatchObject({ ok: true, result: { state: "value", value: 1 } });
+  });
+
   it("computes a student's best attempt average within the authorized period", () => {
     const lessons = createLessons({ courseId: base.course.id, count: 2 });
     const quizA = createQuiz(lessons[0].id, "Student Quiz A");
@@ -1030,8 +1112,16 @@ describe("analyticsService course summaries", () => {
       .set({ title: "A Shared Course" })
       .where(eq(schema.courses.id, sameTitleCourses[1].id))
       .run();
-    purchase(sameTitleCourses[20].id, 2500, "2025-03-01T00:00:00.000Z");
-    purchase(foreignCourse.id, 9000, "2025-03-01T00:00:00.000Z");
+    purchase({
+      courseId: sameTitleCourses[20].id,
+      pricePaid: 2500,
+      createdAt: "2025-03-01T00:00:00.000Z",
+    });
+    purchase({
+      courseId: foreignCourse.id,
+      pricePaid: 9000,
+      createdAt: "2025-03-01T00:00:00.000Z",
+    });
 
     const first = getAnalyticsOverview({
       userId: base.instructor.id,
@@ -1121,8 +1211,16 @@ describe("analyticsService course summaries", () => {
         },
       ])
       .run();
-    purchase(base.course.id, 0, "2025-03-01T00:00:00.000Z");
-    purchase(otherCourse.id, 500, "2025-03-10T00:00:00.000Z");
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 0,
+      createdAt: "2025-03-01T00:00:00.000Z",
+    });
+    purchase({
+      courseId: otherCourse.id,
+      pricePaid: 500,
+      createdAt: "2025-03-10T00:00:00.000Z",
+    });
 
     const result = getAnalyticsOverview({
       userId: base.instructor.id,

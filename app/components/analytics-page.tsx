@@ -13,43 +13,21 @@ import {
 } from "~/lib/analytics-page-data";
 import type { AnalyticsPageData } from "~/lib/analytics-page-data";
 import type { AnalyticsMetricName as MetricName } from "~/services/analyticsService";
-import { formatPrice } from "~/lib/utils";
-import type { AnalyticsMetric } from "~/services/analyticsService";
-
-function SummaryMetric({
-  metric,
-  kind,
-}: {
-  metric: AnalyticsMetric<number>;
-  kind: "price" | "number" | "percent";
-}) {
-  if (metric.state !== "value") {
-    const explanation =
-      metric.state === "empty"
-        ? "No records for the selected period"
-        : metric.state === "unavailable"
-          ? "Unavailable for the selected data"
-          : "Unable to load this metric";
-    return (
-      <span>
-        / <span className="sr-only">({explanation})</span>
-      </span>
-    );
-  }
-  if (kind === "price")
-    return (
-      <span>{metric.value === 0 ? "$0.00" : formatPrice(metric.value)}</span>
-    );
-  if (kind === "percent") return <span>{Math.round(metric.value)}%</span>;
-  return <span>{metric.value}</span>;
-}
 
 function CourseSummaries({
   data,
   disabled,
+  stale,
+  scopeGeneration,
+  onNotice,
+  onScopeFailure,
 }: {
   data: AnalyticsPageData;
   disabled: boolean;
+  stale: boolean;
+  scopeGeneration: string;
+  onNotice: (message: string) => void;
+  onScopeFailure: (message: string) => void;
 }) {
   const summaries = data.courseSummaries;
   const location = useLocation();
@@ -91,24 +69,32 @@ function CourseSummaries({
                   {row.title}
                 </a>
               </h3>
-              <p>
-                <span className="block text-xs text-muted-foreground">
-                  Purchase Total
-                </span>
-                <SummaryMetric metric={row.purchaseTotal} kind="price" />
-              </p>
-              <p>
-                <span className="block text-xs text-muted-foreground">
-                  Enrollment Count
-                </span>
-                <SummaryMetric metric={row.enrollmentCount} kind="number" />
-              </p>
-              <p>
-                <span className="block text-xs text-muted-foreground">
-                  Average Student Learning Progress
-                </span>
-                <SummaryMetric metric={row.studentProgress} kind="percent" />
-              </p>
+              {(
+                [
+                  ["purchaseTotal", "Purchase Total"],
+                  ["enrollmentCount", "Enrollment Count"],
+                  ["studentProgress", "Average Student Learning Progress"],
+                ] as const
+              ).map(([name, title]) => {
+                const retryParams = new URLSearchParams(scopeParams);
+                retryParams.set("courseId", String(row.id));
+                return (
+                  <RetryMetricCard
+                    key={name}
+                    title={title}
+                    name={name}
+                    metric={row[name]}
+                    asOf={data.asOf}
+                    scopeKey={retryParams.toString()}
+                    scopeGeneration={scopeGeneration}
+                    stale={stale}
+                    onNotice={onNotice}
+                    onScopeFailure={onScopeFailure}
+                    courseScoped={true}
+                    summaryCourse={row}
+                  />
+                );
+              })}
             </article>
           ))}
         </div>
@@ -396,7 +382,14 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
         )}
       </div>
       {!course && (
-        <CourseSummaries data={data} disabled={stale || retryPending} />
+        <CourseSummaries
+          data={data}
+          disabled={stale || retryPending}
+          stale={stale}
+          scopeGeneration={snapshotGeneration}
+          onNotice={reportNotice}
+          onScopeFailure={reportScopeFailure}
+        />
       )}
       {course && (
         <div className="space-y-3" aria-labelledby="learning-outcomes-title">

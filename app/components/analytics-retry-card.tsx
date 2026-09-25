@@ -29,6 +29,7 @@ export function RetryMetricCard({
   onNotice,
   onScopeFailure,
   courseScoped,
+  summaryCourse,
 }: {
   title: string;
   name: MetricName;
@@ -40,6 +41,7 @@ export function RetryMetricCard({
   onNotice: (message: string) => void;
   onScopeFailure: (message: string) => void;
   courseScoped: boolean;
+  summaryCourse?: { id: number; title: string };
 }) {
   const fetcher = useFetcher<typeof retryLoader>();
   const [override, setOverride] = useState<{
@@ -79,8 +81,8 @@ export function RetryMetricCard({
       });
       onNotice(
         data.result.state === "error"
-          ? `${title}: Unable to load this metric.`
-          : `${title} refreshed at ${refreshedAt} UTC. Other metrics keep their earlier observation times.`
+          ? `${summaryCourse ? `${summaryCourse.title}: ` : ""}${title}: Unable to load this metric.`
+          : `${summaryCourse ? `${summaryCourse.title}: ` : ""}${title} refreshed at ${refreshedAt} UTC. Other metrics keep their earlier observation times.`
       );
     }
   }, [
@@ -92,6 +94,7 @@ export function RetryMetricCard({
     scopeGeneration,
     scopeKey,
     title,
+    summaryCourse?.title,
   ]);
 
   const isUpdating = fetcher.state !== "idle";
@@ -120,6 +123,11 @@ export function RetryMetricCard({
       retryDisabled={isUpdating || stale}
       onRetry={retry}
       courseScoped={courseScoped}
+      compact={Boolean(summaryCourse)}
+      idPrefix={summaryCourse ? `summary-${summaryCourse.id}-` : ""}
+      retryLabel={
+        summaryCourse ? `Retry ${summaryCourse.title}: ${title}` : undefined
+      }
     />
   );
 }

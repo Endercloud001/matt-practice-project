@@ -1,4 +1,4 @@
-import { Form, useLocation } from "react-router";
+import { Form, useLocation, useSubmit } from "react-router";
 import { UserRole } from "~/db/schema";
 import { cn } from "~/lib/utils";
 import type {
@@ -15,7 +15,7 @@ function ScopeFilter({
   name: "instructorId" | "courseId";
   value: string | number | null;
   options: ({ id: number; name: string } | { id: number; title: string })[];
-  onChange?: () => void;
+  onChange?: React.ChangeEventHandler<HTMLSelectElement>;
 }) {
   const instructor = name === "instructorId";
   return (
@@ -62,6 +62,7 @@ export function AnalyticsFilters({
   disabled: boolean;
 }) {
   const location = useLocation();
+  const submit = useSubmit();
   const course = data.course;
   const currentRange = data.range;
   const currentInstructor =
@@ -88,11 +89,17 @@ export function AnalyticsFilters({
             name="instructorId"
             value={currentInstructor}
             options={data.instructors}
-            onChange={() => {
-              const course = document.querySelector<HTMLSelectElement>(
-                'select[name="courseId"]'
-              );
-              if (course) course.value = "";
+            onChange={(event) => {
+              const form = event.currentTarget.form;
+              if (!form) return;
+              const values = new FormData(form);
+              values.set("courseId", "");
+              values.set("range", currentRange);
+              if (currentRange !== "custom") {
+                values.delete("start");
+                values.delete("end");
+              }
+              submit(values, { method: "get" });
             }}
           />
         )}
