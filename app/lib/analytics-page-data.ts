@@ -1,5 +1,8 @@
 import { UserRole } from "~/db/schema";
-import type { AnalyticsMetric, CourseSummaries } from "~/services/analyticsService";
+import type {
+  AnalyticsMetric,
+  CourseSummaries,
+} from "~/services/analyticsService";
 
 type Range = "all" | "last7days" | "last30days" | "lastYear" | "custom";
 type MetricResult = AnalyticsMetric<number>;
@@ -50,10 +53,23 @@ function isMetricResult(value: unknown): value is MetricResult {
 
 function isCourseSummaries(value: unknown): value is CourseSummaries {
   if (!isRecord(value) || !Array.isArray(value.rows)) return false;
-  if (!["page", "pageSize", "totalCount", "totalPages"].every((key) => typeof value[key] === "number")) return false;
-  return value.pageSize === 20 && value.rows.every((row) =>
-    isRecord(row) && typeof row.id === "number" && typeof row.title === "string" &&
-    isMetricResult(row.purchaseTotal) && isMetricResult(row.enrollmentCount) && isMetricResult(row.studentProgress)
+  if (
+    !["page", "pageSize", "totalCount", "totalPages"].every(
+      (key) => typeof value[key] === "number"
+    )
+  )
+    return false;
+  return (
+    value.pageSize === 20 &&
+    value.rows.every(
+      (row) =>
+        isRecord(row) &&
+        typeof row.id === "number" &&
+        typeof row.title === "string" &&
+        isMetricResult(row.purchaseTotal) &&
+        isMetricResult(row.enrollmentCount) &&
+        isMetricResult(row.studentProgress)
+    )
   );
 }
 

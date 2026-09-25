@@ -22,7 +22,15 @@ const data = {
   viewer: { name: "Instructor", role: UserRole.Instructor },
   filters: { instructorId: null, courseId: 7 },
   courseSummaries: {
-    rows: [{ id: 7, title: "Learning TypeScript", purchaseTotal: { state: "value", value: 0 }, enrollmentCount: { state: "value", value: 1 }, studentProgress: { state: "value", value: 16.7 } }],
+    rows: [
+      {
+        id: 7,
+        title: "Learning TypeScript",
+        purchaseTotal: { state: "value", value: 0 },
+        enrollmentCount: { state: "value", value: 1 },
+        studentProgress: { state: "value", value: 16.7 },
+      },
+    ],
     page: 1,
     pageSize: 20,
     totalCount: 1,
@@ -149,7 +157,9 @@ describe("analytics page presentation", () => {
     });
     expect(markup).toContain('aria-label="Course summaries pagination"');
     expect(markup).toContain("Page 2 of 2");
-    expect(markup).toContain('href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01"');
+    expect(markup).toContain(
+      'href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01"'
+    );
     expect(markup).toContain('aria-disabled="true"');
   });
 });

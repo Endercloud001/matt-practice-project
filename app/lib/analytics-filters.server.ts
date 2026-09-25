@@ -48,7 +48,11 @@ export function parseAnalyticsFilters(
   const rawCoursePage = searchParams.get("coursePage");
   let coursePage: number | undefined;
   if (rawCoursePage !== null && rawCoursePage !== "") {
-    if (!/^\d+$/.test(rawCoursePage) || !Number.isSafeInteger(Number(rawCoursePage)) || Number(rawCoursePage) < 1) {
+    if (
+      !/^\d+$/.test(rawCoursePage) ||
+      !Number.isSafeInteger(Number(rawCoursePage)) ||
+      Number(rawCoursePage) < 1
+    ) {
       fields.coursePage = ["Enter a positive course page number."];
     } else {
       coursePage = Number(rawCoursePage);
