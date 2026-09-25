@@ -36,9 +36,17 @@ One summary test run stalled because its browser URL matcher omitted React Route
 
 Local scripts, logs, reports and synthetic-data screenshots: `E:/analytics-worktrees/dashboard-delivery-acceptance/`. The earlier authentication state stays in the existing local acceptance directory and must not be uploaded.
 
-## Human acceptance still required
+## Human acceptance update — 2026-09-26
 
-The earlier #6 acceptance includes screen-reader behavior; #8 has user-confirmed human acceptance without a separate listening record. #2/#4/#5 records explicitly exclude listening. #7 now has additional automated browser coverage, not a claim of human listening. The current changes to instructor cascading and summary recovery require a focused human check before final integration.
+The user confirmed the visible course-summary Retry behavior: the target course/metric refreshed, the explanation was visible, and other metrics did not refresh. Their supplied screenshot shows Student Snapshot Acceptance progress at 49%. This passes the visual/functional portion of item 4 below.
+
+The local observer independently recorded HTTP 200, the target progress at 49%, unchanged sibling content, and one live region. Its text stated that the target metric refreshed and other metrics retain their earlier observation times. The database source had been restored before the user clicked Retry; a browser-only two-second delay made the pending state observable.
+
+The user has not yet confirmed audible screen-reader announcements, duplicate speech, focus behavior, or the screen-reader/browser versions. Those aspects of item 4 remain pending; this confirmation does not complete items 1–3. Local observer evidence: `E:/analytics-worktrees/dashboard-delivery-acceptance/manual-summary-retry-state.json`. User screenshot: `codex-clipboard-81ec796d-5322-4e7e-9abf-f1f7137e9fb2.png` (retained with local acceptance evidence).
+
+## Remaining human acceptance
+
+The earlier #6 acceptance includes screen-reader behavior; #8 has user-confirmed human acceptance without a separate listening record. #2/#4/#5 records explicitly exclude listening. #7 now has additional automated browser coverage, not a claim of human listening. Instructor cascading and the listening/focus aspects of summary recovery still require a focused human check before final integration.
 
 The local server is at `http://127.0.0.1:4178`; use the existing email-only local login. Instructor: `sarah.chen@ralph.dev`; Admin: `alex.rivera@ralph.dev` (confirmed in the local fixture).
 
