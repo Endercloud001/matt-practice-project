@@ -21,6 +21,13 @@ const data = {
   instructors: [],
   viewer: { name: "Instructor", role: UserRole.Instructor },
   filters: { instructorId: null, courseId: 7 },
+  courseSummaries: {
+    rows: [{ id: 7, title: "Learning TypeScript", purchaseTotal: { state: "value", value: 0 }, enrollmentCount: { state: "value", value: 1 }, studentProgress: { state: "value", value: 16.7 } }],
+    page: 1,
+    pageSize: 20,
+    totalCount: 1,
+    totalPages: 1,
+  },
 };
 
 function renderPage(loaderData: unknown, path = "/instructor/analytics") {
@@ -122,11 +129,27 @@ describe("analytics page presentation", () => {
     ]) {
       expect(markup).toContain(name);
     }
-    expect(markup.match(/<section/g)).toHaveLength(5);
+    expect(markup.match(/<section/g)).toHaveLength(6);
     expect(markup).toContain("17%");
     expect(markup).toContain(
       "/instructor/analytics/7?range=custom&amp;start=2026-09-01&amp;end=2026-10-01"
     );
     expect(markup.match(/role="status"/g)).toHaveLength(1);
+  });
+
+  it("renders accessible course-summary pagination and preserves dates", () => {
+    const markup = renderPage({
+      ...data,
+      courseSummaries: {
+        ...data.courseSummaries,
+        page: 2,
+        totalCount: 21,
+        totalPages: 2,
+      },
+    });
+    expect(markup).toContain('aria-label="Course summaries pagination"');
+    expect(markup).toContain("Page 2 of 2");
+    expect(markup).toContain('href="/instructor/analytics?range=custom&amp;start=2026-09-01&amp;end=2026-10-01"');
+    expect(markup).toContain('aria-disabled="true"');
   });
 });

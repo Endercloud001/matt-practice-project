@@ -13,6 +13,7 @@ export type AnalyticsFilters = {
   courseId?: number;
   start?: string;
   end?: string;
+  coursePage?: number;
 };
 
 export function parseAnalyticsFilters(
@@ -44,6 +45,15 @@ export function parseAnalyticsFilters(
   };
   const instructorId = readId("instructorId");
   const courseId = readId("courseId");
+  const rawCoursePage = searchParams.get("coursePage");
+  let coursePage: number | undefined;
+  if (rawCoursePage !== null && rawCoursePage !== "") {
+    if (!/^\d+$/.test(rawCoursePage) || !Number.isSafeInteger(Number(rawCoursePage)) || Number(rawCoursePage) < 1) {
+      fields.coursePage = ["Enter a positive course page number."];
+    } else {
+      coursePage = Number(rawCoursePage);
+    }
+  }
   const startRaw = searchParams.get("start");
   const endRaw = searchParams.get("end");
 
@@ -97,6 +107,7 @@ export function parseAnalyticsFilters(
           ...(courseId !== undefined ? { courseId } : {}),
           ...(start ? { start } : {}),
           ...(end ? { end } : {}),
+          ...(coursePage !== undefined ? { coursePage } : {}),
         },
         fields,
       };

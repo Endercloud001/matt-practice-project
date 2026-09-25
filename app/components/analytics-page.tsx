@@ -10,7 +10,58 @@ import {
   isAnalyticsPageData,
   isAnalyticsPageError,
 } from "~/lib/analytics-page-data";
+import type { AnalyticsPageData } from "~/lib/analytics-page-data";
 import type { AnalyticsMetricName as MetricName } from "~/services/analyticsService";
+import { formatPrice } from "~/lib/utils";
+import type { AnalyticsMetric } from "~/services/analyticsService";
+
+function SummaryMetric({ metric, kind }: { metric: AnalyticsMetric<number>; kind: "price" | "number" | "percent" }) {
+  if (metric.state !== "value") return <span title={metric.state === "empty" ? "No records" : metric.state === "unavailable" ? "Unavailable" : "Unable to load"}>/</span>;
+  if (kind === "price") return <span>{formatPrice(metric.value)}</span>;
+  if (kind === "percent") return <span>{Math.round(metric.value)}%</span>;
+  return <span>{metric.value}</span>;
+}
+
+function CourseSummaries({ data }: { data: AnalyticsPageData }) {
+  const summaries = data.courseSummaries;
+  if (!summaries) return null;
+  const dateParams = new URLSearchParams();
+  for (const name of ["range", "start", "end"]) {
+    const value = new URLSearchParams(useLocation().search).get(name);
+    if (value) dateParams.set(name, value);
+  }
+  const pageHref = (page: number) => {
+    const params = new URLSearchParams(dateParams);
+    if (page > 1) params.set("coursePage", String(page));
+    return `/instructor/analytics?${params}`;
+  };
+  return (
+    <section aria-labelledby="course-summaries-title" className="space-y-3">
+      <h2 id="course-summaries-title" className="text-xl font-semibold">Course summaries</h2>
+      {summaries.rows.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">No courses available to compare.</p> : (
+        <div className="overflow-x-auto rounded-xl border">
+          <table className="w-full min-w-[42rem] text-left text-sm">
+            <caption className="sr-only">Course summary comparison</caption>
+            <thead className="bg-muted/40"><tr><th className="p-3 font-medium">Course</th><th className="p-3 font-medium">Purchase Total</th><th className="p-3 font-medium">Enrollment Count</th><th className="p-3 font-medium">Average Student Learning Progress</th></tr></thead>
+            <tbody>{summaries.rows.map((row) => (
+              <tr key={row.id} className="border-t">
+                <th scope="row" className="p-3 font-medium"><a className="underline hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" href={`/instructor/analytics/${row.id}?${dateParams}`}>{row.title}</a></th>
+                <td className="p-3"><SummaryMetric metric={row.purchaseTotal} kind="price" /></td>
+                <td className="p-3"><SummaryMetric metric={row.enrollmentCount} kind="number" /></td>
+                <td className="p-3"><SummaryMetric metric={row.studentProgress} kind="percent" /></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {summaries.totalPages > 1 && <nav aria-label="Course summaries pagination" className="flex items-center justify-between gap-3 text-sm">
+        {summaries.page > 1 ? <a className="rounded-md border px-3 py-2 underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" href={pageHref(summaries.page - 1)}>Previous</a> : <span aria-disabled="true" className="rounded-md border px-3 py-2 text-muted-foreground">Previous</span>}
+        <span aria-live="polite">Page {summaries.page} of {summaries.totalPages}</span>
+        {summaries.page < summaries.totalPages ? <a className="rounded-md border px-3 py-2 underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" href={pageHref(summaries.page + 1)}>Next</a> : <span aria-disabled="true" className="rounded-md border px-3 py-2 text-muted-foreground">Next</span>}
+      </nav>}
+    </section>
+  );
+}
 
 function SkeletonCards() {
   return (
@@ -206,6 +257,7 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           }
         </a>
       )}
+      {!course && <CourseSummaries data={data} />}
       <div
         className={cn(
           "grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2",

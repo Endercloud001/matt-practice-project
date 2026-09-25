@@ -63,6 +63,7 @@ export async function loadAnalyticsPage({
     ...(query.courseId !== undefined ? { courseId: query.courseId } : {}),
     ...(query.start ? { start: query.start } : {}),
     ...(query.end ? { end: query.end } : {}),
+    ...(query.coursePage !== undefined ? { coursePage: query.coursePage } : {}),
   };
   const result =
     courseId === undefined
@@ -70,7 +71,12 @@ export async function loadAnalyticsPage({
       : getCourseAnalytics({ ...serviceOptions, courseId });
   if (!result.ok) {
     return Response.json(result, {
-      status: result.error === "not_found" ? 404 : 403,
+      status:
+        result.error === "not_found"
+          ? 404
+          : result.error === "invalid_page"
+            ? 400
+            : 403,
     });
   }
   const selectedInstructorId =

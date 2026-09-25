@@ -1,5 +1,5 @@
 import { UserRole } from "~/db/schema";
-import type { AnalyticsMetric } from "~/services/analyticsService";
+import type { AnalyticsMetric, CourseSummaries } from "~/services/analyticsService";
 
 type Range = "all" | "last7days" | "last30days" | "lastYear" | "custom";
 type MetricResult = AnalyticsMetric<number>;
@@ -18,6 +18,7 @@ export type AnalyticsPageData = {
   instructors: { id: number; name: string }[];
   viewer: { name: string; role: UserRole };
   filters: { instructorId: number | null; courseId: number | null };
+  courseSummaries?: CourseSummaries;
 };
 export type AnalyticsPageError = {
   course?: { id: number; title: string };
@@ -45,6 +46,15 @@ function isMetricResult(value: unknown): value is MetricResult {
       value.reason === "missing_source_data" || value.reason === "no_lessons"
     );
   return value.state === "error" && value.reason === "read_failed";
+}
+
+function isCourseSummaries(value: unknown): value is CourseSummaries {
+  if (!isRecord(value) || !Array.isArray(value.rows)) return false;
+  if (!["page", "pageSize", "totalCount", "totalPages"].every((key) => typeof value[key] === "number")) return false;
+  return value.pageSize === 20 && value.rows.every((row) =>
+    isRecord(row) && typeof row.id === "number" && typeof row.title === "string" &&
+    isMetricResult(row.purchaseTotal) && isMetricResult(row.enrollmentCount) && isMetricResult(row.studentProgress)
+  );
 }
 
 export function isAnalyticsPageData(
@@ -91,7 +101,8 @@ export function isAnalyticsPageData(
     (typeof value.filters.instructorId === "number" ||
       value.filters.instructorId === null) &&
     (typeof value.filters.courseId === "number" ||
-      value.filters.courseId === null)
+      value.filters.courseId === null) &&
+    (value.course !== undefined || isCourseSummaries(value.courseSummaries))
   );
 }
 
