@@ -12,9 +12,9 @@ export type AnalyticsPageData = {
   purchaseTotal: MetricResult;
   enrollmentCount: MetricResult;
   studentProgress: MetricResult;
-  averageBestAttemptQuizScore?: MetricResult;
-  participatingStudents?: MetricResult;
-  quizCount?: MetricResult;
+  averageBestAttemptQuizScore: MetricResult;
+  participatingStudents: MetricResult;
+  quizCount: MetricResult;
   course?: { id: number; title: string };
   retentionRate: MetricResult;
   netRevenue: MetricResult;

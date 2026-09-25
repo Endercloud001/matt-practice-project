@@ -48,6 +48,46 @@ describe("analytics metric retry resource", () => {
     expect(payload).not.toHaveProperty("purchaseTotal");
   });
 
+  it("retries quiz outcomes through the same authorized course and date scope", async () => {
+    const courseModule = testDb
+      .insert(schema.modules)
+      .values({ courseId: base.course.id, title: "Quiz Module", position: 1 })
+      .returning()
+      .get();
+    const lesson = testDb
+      .insert(schema.lessons)
+      .values({ moduleId: courseModule.id, title: "Quiz Lesson", position: 1 })
+      .returning()
+      .get();
+    const quiz = testDb
+      .insert(schema.quizzes)
+      .values({ lessonId: lesson.id, title: "Outcome Quiz", passingScore: 0.7 })
+      .returning()
+      .get();
+    testDb
+      .insert(schema.quizAttempts)
+      .values({
+        userId: base.user.id,
+        quizId: quiz.id,
+        score: 0.8,
+        passed: true,
+        attemptedAt: "2026-09-10T00:00:00.000Z",
+      })
+      .run();
+
+    const response = await callLoader(
+      `?metric=averageBestAttemptQuizScore&courseId=${base.course.id}&range=custom&start=2026-09-01&end=2026-10-01&requestId=quiz-retry`
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      metric: "averageBestAttemptQuizScore",
+      result: { state: "value", value: 0.8 },
+      requestId: "quiz-retry",
+      scopeKey: `courseId=${base.course.id}&range=custom&start=2026-09-01&end=2026-10-01`,
+    });
+  });
+
   it("returns only the requested metric with its matching scope and request ID", async () => {
     testDb
       .insert(schema.enrollments)
@@ -78,6 +118,17 @@ describe("analytics metric retry resource", () => {
     );
     expect(response).toMatchObject({ status: 400 });
     expect(await (response as Response).json()).toEqual({
+      ok: false,
+      error: "invalid_query",
+    });
+  });
+
+  it("requires a request ID before reading a retry metric", async () => {
+    const response = await callLoader(
+      `?metric=quizCount&courseId=${base.course.id}&range=all`
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
       ok: false,
       error: "invalid_query",
     });

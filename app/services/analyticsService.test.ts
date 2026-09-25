@@ -15,6 +15,7 @@ vi.mock("~/db", () => ({
 import {
   analyticsMetricNames,
   getCourseAnalytics,
+  getStudentQuizAverage,
   getAnalyticsOverview,
   getAnalyticsMetric,
   getPurchaseTotal,
@@ -795,6 +796,69 @@ describe("analyticsService quiz outcomes", () => {
     base = seedBaseData(testDb);
   });
 
+  it("computes a student's best attempt average within the authorized period", () => {
+    const lessons = createLessons({ courseId: base.course.id, count: 2 });
+    const quizA = createQuiz(lessons[0].id, "Student Quiz A");
+    const quizB = createQuiz(lessons[1].id, "Student Quiz B");
+    attempt({
+      userId: base.user.id,
+      quizId: quizA.id,
+      score: 0.4,
+      attemptedAt: "2026-09-02T00:00:00.000Z",
+    });
+    attempt({
+      userId: base.user.id,
+      quizId: quizA.id,
+      score: 0.8,
+      attemptedAt: "2026-09-03T00:00:00.000Z",
+    });
+    attempt({
+      userId: base.user.id,
+      quizId: quizB.id,
+      score: 0.6,
+      attemptedAt: "2026-09-03T00:00:00.000Z",
+    });
+    expect(
+      getStudentQuizAverage({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+        studentId: base.user.id,
+        start: "2026-09-01T00:00:00.000Z",
+        end: "2026-09-04T00:00:00.000Z",
+      })
+    ).toEqual({ ok: true, result: { state: "value", value: 0.7 } });
+  });
+
+  it("returns empty for a student with no in-period attempts and forbids another instructor", () => {
+    const lessons = createLessons({ courseId: base.course.id, count: 1 });
+    createQuiz(lessons[0].id, "Empty Student Quiz");
+    expect(
+      getStudentQuizAverage({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+        studentId: base.user.id,
+        start: "2026-09-01T00:00:00.000Z",
+        end: "2026-09-02T00:00:00.000Z",
+      })
+    ).toEqual({ ok: true, result: { state: "empty", reason: "no_attempts" } });
+    const other = testDb
+      .insert(schema.users)
+      .values({
+        name: "Other",
+        email: "other@example.com",
+        role: schema.UserRole.Instructor,
+      })
+      .returning()
+      .get();
+    expect(
+      getStudentQuizAverage({
+        userId: other.id,
+        courseId: base.course.id,
+        studentId: base.user.id,
+      })
+    ).toEqual({ ok: false, error: "forbidden" });
+  });
+
   it("averages quizzes equally after selecting each student's best attempt and deduplicates participants", () => {
     const lessons = createLessons({ courseId: base.course.id, count: 2 });
     const quizA = createQuiz(lessons[0].id, "Quiz A");
@@ -857,22 +921,40 @@ describe("analyticsService quiz outcomes", () => {
   });
 
   it("distinguishes no quizzes, no in-period attempts, and a genuine zero score", () => {
-    expect(getCourseAnalytics({ userId: base.instructor.id, courseId: base.course.id })).toMatchObject({
-      averageBestAttemptQuizScore: { state: "unavailable", reason: "no_quizzes" },
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+      })
+    ).toMatchObject({
+      averageBestAttemptQuizScore: {
+        state: "unavailable",
+        reason: "no_quizzes",
+      },
       participatingStudents: { state: "empty", reason: "no_records" },
       quizCount: { state: "value", value: 0 },
     });
 
     const [lesson] = createLessons({ courseId: base.course.id, count: 1 });
     const quiz = createQuiz(lesson.id, "Empty Quiz");
-    expect(getCourseAnalytics({ userId: base.instructor.id, courseId: base.course.id })).toMatchObject({
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+      })
+    ).toMatchObject({
       averageBestAttemptQuizScore: { state: "empty", reason: "no_attempts" },
       participatingStudents: { state: "empty", reason: "no_records" },
       quizCount: { state: "value", value: 1 },
     });
 
     attempt({ userId: base.user.id, quizId: quiz.id, score: 0 });
-    expect(getCourseAnalytics({ userId: base.instructor.id, courseId: base.course.id })).toMatchObject({
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+      })
+    ).toMatchObject({
       averageBestAttemptQuizScore: { state: "value", value: 0 },
       participatingStudents: { state: "value", value: 1 },
     });
@@ -881,7 +963,11 @@ describe("analyticsService quiz outcomes", () => {
   it("enforces course authorization for quiz outcomes while allowing Admin access", () => {
     const otherInstructor = testDb
       .insert(schema.users)
-      .values({ name: "Other Instructor", email: "other-instructor@example.com", role: schema.UserRole.Instructor })
+      .values({
+        name: "Other Instructor",
+        email: "other-instructor@example.com",
+        role: schema.UserRole.Instructor,
+      })
       .returning()
       .get();
     const foreignCourse = createCourse(otherInstructor.id, "Foreign Course");
@@ -889,8 +975,18 @@ describe("analyticsService quiz outcomes", () => {
     const quiz = createQuiz(lesson.id, "Foreign Quiz");
     attempt({ userId: base.user.id, quizId: quiz.id, score: 0.9 });
 
-    expect(getCourseAnalytics({ userId: base.instructor.id, courseId: foreignCourse.id })).toEqual({ ok: false, error: "forbidden" });
-    expect(getCourseAnalytics({ userId: createAdmin().id, courseId: foreignCourse.id })).toMatchObject({
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: foreignCourse.id,
+      })
+    ).toEqual({ ok: false, error: "forbidden" });
+    expect(
+      getCourseAnalytics({
+        userId: createAdmin().id,
+        courseId: foreignCourse.id,
+      })
+    ).toMatchObject({
       ok: true,
       averageBestAttemptQuizScore: { state: "value", value: 0.9 },
       participatingStudents: { state: "value", value: 1 },
