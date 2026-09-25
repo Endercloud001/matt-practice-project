@@ -12,6 +12,9 @@ export type AnalyticsPageData = {
   purchaseTotal: MetricResult;
   enrollmentCount: MetricResult;
   studentProgress: MetricResult;
+  averageBestAttemptQuizScore?: MetricResult;
+  participatingStudents?: MetricResult;
+  quizCount?: MetricResult;
   course?: { id: number; title: string };
   retentionRate: MetricResult;
   netRevenue: MetricResult;
@@ -42,11 +45,15 @@ function isMetricResult(value: unknown): value is MetricResult {
   if (value.state === "value") return typeof value.value === "number";
   if (value.state === "empty")
     return (
-      value.reason === "no_records" || value.reason === "no_authorized_courses"
+      value.reason === "no_records" ||
+      value.reason === "no_authorized_courses" ||
+      value.reason === "no_attempts"
     );
   if (value.state === "unavailable")
     return (
-      value.reason === "missing_source_data" || value.reason === "no_lessons"
+      value.reason === "missing_source_data" ||
+      value.reason === "no_lessons" ||
+      value.reason === "no_quizzes"
     );
   return value.state === "error" && value.reason === "read_failed";
 }
@@ -118,7 +125,11 @@ export function isAnalyticsPageData(
       value.filters.instructorId === null) &&
     (typeof value.filters.courseId === "number" ||
       value.filters.courseId === null) &&
-    (value.course !== undefined || isCourseSummaries(value.courseSummaries))
+    (value.course !== undefined
+      ? isMetricResult(value.averageBestAttemptQuizScore) &&
+        isMetricResult(value.participatingStudents) &&
+        isMetricResult(value.quizCount)
+      : isCourseSummaries(value.courseSummaries))
   );
 }
 

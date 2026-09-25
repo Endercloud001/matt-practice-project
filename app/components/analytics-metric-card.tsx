@@ -32,7 +32,9 @@ export function AnalyticsMetricCard({
           : formatPrice(metric.value)
         : name === "studentProgress"
           ? `${Math.round(metric.value)}%`
-          : new Intl.NumberFormat("en-US").format(metric.value)
+          : name === "averageBestAttemptQuizScore"
+            ? `${(metric.value * 100).toFixed(1)}%`
+            : new Intl.NumberFormat("en-US").format(metric.value)
       : metric.state === "error"
         ? "Unable to load this metric"
         : "/";
@@ -40,15 +42,19 @@ export function AnalyticsMetricCard({
     metric.state === "empty"
       ? metric.reason === "no_authorized_courses"
         ? "No courses available to view"
-        : name === "studentProgress" && courseScoped
-          ? "No eligible students in this course"
-          : "No data for the selected period"
+        : metric.reason === "no_attempts"
+          ? "No quiz attempts in the selected period"
+          : name === "studentProgress" && courseScoped
+            ? "No eligible students in this course"
+            : "No data for the selected period"
       : metric.state === "unavailable"
         ? metric.reason === "no_lessons"
           ? "No calculable lessons for eligible enrollments."
-          : name === "retentionRate"
-            ? "Retention rate is unavailable without activity records."
-            : "Net revenue is unavailable without refund records."
+          : metric.reason === "no_quizzes"
+            ? "No quizzes in this course."
+            : name === "retentionRate"
+              ? "Retention rate is unavailable without activity records."
+              : "Net revenue is unavailable without refund records."
         : metric.state === "error"
           ? "The source data could not be read. Try again."
           : null;
