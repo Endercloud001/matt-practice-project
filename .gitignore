@@ -17,3 +17,8 @@
 # JetBrains
 /.idea/
 
+# Keep only shared agent guidance and product requirements under docs.
+/docs/*
+!/docs/agents/
+!/docs/PRDs/
+
