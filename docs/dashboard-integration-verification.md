@@ -42,18 +42,18 @@ The user confirmed the visible course-summary Retry behavior: the target course/
 
 The local observer independently recorded HTTP 200, the target progress at 49%, unchanged sibling content, and one live region. Its text stated that the target metric refreshed and other metrics retain their earlier observation times. The database source had been restored before the user clicked Retry; a browser-only two-second delay made the pending state observable.
 
-The user has not yet confirmed audible screen-reader announcements, duplicate speech, focus behavior, or the screen-reader/browser versions. Those aspects of item 4 remain pending; this confirmation does not complete items 1–3. Local observer evidence: `E:/analytics-worktrees/dashboard-delivery-acceptance/manual-summary-retry-state.json`. User screenshot: `codex-clipboard-81ec796d-5322-4e7e-9abf-f1f7137e9fb2.png` (retained with local acceptance evidence).
+The user subsequently confirmed using a screen reader, hearing both the pending and completed announcements, and encountering no speech or operation problems. Item 4 is now passed for visual behavior and screen-reader listening. Screen-reader name/version was not supplied; this is an evidence detail, not an additional acceptance blocker. This confirmation does not complete items 1–3. Local observer evidence: `E:/analytics-worktrees/dashboard-delivery-acceptance/manual-summary-retry-state.json`. User screenshot: `codex-clipboard-81ec796d-5322-4e7e-9abf-f1f7137e9fb2.png` (retained with local acceptance evidence).
 
 ## Remaining human acceptance
 
-The earlier #6 acceptance includes screen-reader behavior; #8 has user-confirmed human acceptance without a separate listening record. #2/#4/#5 records explicitly exclude listening. #7 now has additional automated browser coverage, not a claim of human listening. Instructor cascading and the listening/focus aspects of summary recovery still require a focused human check before final integration.
+The earlier #6 acceptance includes screen-reader behavior; #8 has user-confirmed human acceptance without a separate listening record. #2/#4/#5 records explicitly exclude listening. #7 now has additional automated browser coverage, not a claim of human listening. Current item 4 summary recovery has passed human listening; items 1–3 below remain unconfirmed. The new acceptance does not rewrite historical records.
 
 The local server is at `http://127.0.0.1:4178`; use the existing email-only local login. Instructor: `sarah.chen@ralph.dev`; Admin: `alex.rivera@ralph.dev` (confirmed in the local fixture).
 
 1. Admin overview: use the Instructor control with keyboard and your screen reader. Change instructor; confirm refreshed course choices, date preservation, a comprehensible update announcement, and usable focus after navigation. Report if automatic submission makes choosing an instructor difficult.
 2. Instructor overview: read the five KPIs and course summaries. Confirm missing-data explanations are audible and visible, and summary heading structure is understandable. At 390px, summaries remain vertically stacked.
 3. Course 3: review Course learning outcomes and Student snapshots. Confirm heading navigation, labels, pagination destination labels, disabled controls, and one coherent loading/refresh announcement. Check horizontal keyboard scrolling and sticky Name on mobile.
-4. Error/Retry listening needs a controlled local fault. Ask the agent to prepare it when you are ready; do not run the database seed. The agent restores the fixture and remains available while you activate Retry and listen for the target metric/observation announcement.
+4. **Passed — summary Retry:** the user confirmed target-only recovery, visible explanation, audible pending/completed announcements, and no speech or operation problems. The data source was restored before Retry. No further fault injection is needed for this accepted scenario.
 
 Record browser/screen-reader versions, pass/fail for each item and any observed defect. Do not convert automated structure checks into a listening claim. If the prototype's historical listening requirement is still needed for its separate closure, decide that explicitly; production acceptance does not retroactively change its record.
 
