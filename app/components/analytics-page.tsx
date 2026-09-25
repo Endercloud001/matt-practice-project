@@ -237,7 +237,17 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
       setScopeFailure({ snapshot: snapshotGeneration, message }),
     [snapshotGeneration]
   );
-  useEffect(() => setNotice(""), [data?.asOf, location.key]);
+  useEffect(() => {
+    setNotice(
+      data?.studentSnapshots?.rows.some(
+        (row) =>
+          row.studentProgress.state === "error" ||
+          row.quizAverage.state === "error"
+      )
+        ? "Some student metrics could not be loaded. Retry the affected column in Student snapshots."
+        : ""
+    );
+  }, [data?.asOf, data?.studentSnapshots, location.key]);
   if (!data && errorData?.error === "forbidden") {
     return (
       <div role="alert" className="rounded-xl border border-destructive p-6">
@@ -420,6 +430,9 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           asOf={data.asOf}
           disabled={stale || retryPending}
           updating={stale}
+          scopeGeneration={snapshotGeneration}
+          onNotice={reportNotice}
+          onScopeFailure={reportScopeFailure}
         />
       )}
     </div>

@@ -46,6 +46,30 @@ function renderTable(snapshots = snapshot, disabled = false) {
 }
 
 describe("student snapshot presentation", () => {
+  it("provides one retry per failed column with safe explanations and preserves successful values", () => {
+    const snapshots: StudentSnapshots = {
+      ...snapshot,
+      rows: [
+        {
+          ...snapshot.rows[0],
+          studentProgress: { state: "error", reason: "read_failed" },
+        },
+        {
+          ...snapshot.rows[0],
+          id: 4,
+          studentProgress: { state: "error", reason: "read_failed" },
+        },
+      ],
+    };
+    const markup = renderTable(snapshots);
+    expect(markup.match(/Retry Average Progress/g)).toHaveLength(1);
+    expect(markup).not.toContain("Retry Best-Attempt Quiz Average");
+    expect(markup).toContain("Unable to load student metrics");
+    expect(markup).toContain("87.5%");
+    expect(markup).not.toContain("aria-live=");
+    const disabledMarkup = renderTable(snapshots, true);
+    expect(disabledMarkup).toContain('disabled=""');
+  });
   it("renders full identities, all five ordered columns and genuine zero", () => {
     const markup = renderTable();
     const columns = [

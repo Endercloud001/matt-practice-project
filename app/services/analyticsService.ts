@@ -97,6 +97,17 @@ export type StudentSnapshots = {
   totalPages: number;
 };
 
+export type StudentSnapshotMetricName = "studentProgress" | "quizAverage";
+
+export type StudentSnapshotMetricResult =
+  | (Omit<StudentSnapshots, "rows"> & {
+      ok: true;
+      asOf: string;
+      metric: StudentSnapshotMetricName;
+      rows: { id: number; result: AnalyticsMetric<number> }[];
+    })
+  | { ok: false; error: "forbidden" | "not_found" | "invalid_page" };
+
 type AnalyticsOverviewMetricsResult =
   | {
       ok: true;
@@ -925,7 +936,7 @@ function readCourseSummaries(
 function readStudentSnapshots(
   tx: AnalyticsTransaction,
   course: StudentSnapshots["course"],
-  options: AnalyticsOverviewOptions
+  options: AnalyticsOverviewOptions & { metric?: StudentSnapshotMetricName }
 ): StudentSnapshots {
   const page = options.studentPage ?? 1;
   const conditions = [eq(enrollments.courseId, course.id)];
@@ -956,7 +967,7 @@ function readStudentSnapshots(
     state: "error",
     reason: "read_failed",
   };
-  if (studentIds.length > 0) {
+  if (studentIds.length > 0 && options.metric !== "quizAverage") {
     try {
       const lessonCount =
         tx
@@ -999,6 +1010,8 @@ function readStudentSnapshots(
     } catch {
       // A failed progress read must not hide identities or quiz scores.
     }
+  }
+  if (studentIds.length > 0 && options.metric !== "studentProgress") {
     try {
       const courseQuizzes = tx
         .select({ id: quizzes.id })
@@ -1064,6 +1077,37 @@ function readStudentSnapshots(
     totalCount,
     totalPages: Math.max(1, Math.ceil(totalCount / 20)),
   };
+}
+
+export function getStudentSnapshotMetric(
+  options: PurchaseTotalOptions & {
+    courseId: number;
+    studentPage?: number;
+    metric: StudentSnapshotMetricName;
+  }
+): StudentSnapshotMetricResult {
+  return db.transaction((tx) => {
+    const scope = getAuthorizedScope(tx, options);
+    if (!scope.ok) return scope;
+    const course = scope.courses[0];
+    if (!course) return { ok: false, error: "not_found" };
+    const page = options.studentPage ?? 1;
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      !Number.isSafeInteger((page - 1) * 20)
+    )
+      return { ok: false, error: "invalid_page" };
+    const asOf = new Date().toISOString();
+    const { rows, ...pagination } = readStudentSnapshots(tx, course, options);
+    return {
+      ok: true,
+      asOf,
+      metric: options.metric,
+      ...pagination,
+      rows: rows.map((row) => ({ id: row.id, result: row[options.metric] })),
+    };
+  });
 }
 
 export function getAnalyticsOverview(

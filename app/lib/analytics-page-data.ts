@@ -42,7 +42,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isMetricResult(value: unknown): value is MetricResult {
+export function isMetricResult(value: unknown): value is MetricResult {
   if (!isRecord(value) || typeof value.state !== "string") return false;
   if (value.state === "value") return typeof value.value === "number";
   if (value.state === "empty")

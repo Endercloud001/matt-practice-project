@@ -58,6 +58,10 @@ export default [
     "routes/api.analytics.purchase-total.ts"
   ),
   route("api/analytics/retry", "routes/api.analytics.retry.ts"),
+  route(
+    "api/analytics/students/retry",
+    "routes/api.analytics.students.retry.ts"
+  ),
   route("api/switch-user", "routes/api.switch-user.ts"),
   route("api/logout", "routes/api.logout.ts"),
   route("api/video-tracking", "routes/api.video-tracking.ts"),

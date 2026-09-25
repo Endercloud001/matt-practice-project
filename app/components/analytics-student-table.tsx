@@ -1,10 +1,40 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useFetcher, useLocation } from "react-router";
 import { cn } from "~/lib/utils";
+import { isMetricResult } from "~/lib/analytics-page-data";
 import type {
   AnalyticsMetric,
   StudentSnapshots,
 } from "~/services/analyticsService";
+
+type StudentMetricName = "studentProgress" | "quizAverage";
+type ColumnResult = {
+  asOf: string;
+  rows: { id: number; result: AnalyticsMetric<number> }[];
+};
+const columnTitles: Record<StudentMetricName, string> = {
+  studentProgress: "Average Progress",
+  quizAverage: "Best-Attempt Quiz Average",
+};
+const ignoreNotice = (_message: string) => {};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+function isColumnResult(
+  value: Record<string, unknown>
+): value is Record<string, unknown> & ColumnResult {
+  return (
+    typeof value.asOf === "string" &&
+    Number.isFinite(Date.parse(value.asOf)) &&
+    Array.isArray(value.rows) &&
+    value.rows.every(
+      (row) =>
+        isRecord(row) &&
+        typeof row.id === "number" &&
+        isMetricResult(row.result)
+    )
+  );
+}
 
 function StudentMetric({
   metric,
@@ -48,13 +78,141 @@ export function AnalyticsStudentTable({
   asOf,
   disabled = false,
   updating = false,
+  scopeGeneration,
+  onNotice = ignoreNotice,
+  onScopeFailure = ignoreNotice,
 }: {
   snapshots: StudentSnapshots;
   asOf: string;
   disabled?: boolean;
   updating?: boolean;
+  scopeGeneration?: string;
+  onNotice?: (message: string) => void;
+  onScopeFailure?: (message: string) => void;
 }) {
   const location = useLocation();
+  const fetcher = useFetcher<unknown>();
+  const generation =
+    scopeGeneration ?? `${location.pathname}:${location.key}:${asOf}`;
+  const scopeKey = `${location.pathname}${location.search}`;
+  const [request, setRequest] = useState<{
+    id: string;
+    generation: string;
+    metric: StudentMetricName;
+  } | null>(null);
+  const handledRequest = useRef<string | null>(null);
+  const [columns, setColumns] = useState<{
+    generation: string;
+    values: Partial<Record<StudentMetricName, ColumnResult>>;
+  }>({ generation, values: {} });
+  const [reloadRequired, setReloadRequired] = useState(false);
+  const currentColumns =
+    columns.generation === generation ? columns.values : {};
+  const busy = disabled || updating || fetcher.state !== "idle";
+  useEffect(() => {
+    const response = fetcher.data;
+    if (
+      updating ||
+      fetcher.state !== "idle" ||
+      !request ||
+      request.generation !== generation ||
+      handledRequest.current === request.id
+    )
+      return;
+    if (
+      !isRecord(response) ||
+      response.requestId !== request.id ||
+      response.scopeKey !== scopeKey
+    )
+      return;
+    handledRequest.current = request.id;
+    if (
+      response.ok === false &&
+      (response.error === "forbidden" ||
+        response.error === "not_found" ||
+        response.error === "invalid_page")
+    ) {
+      setReloadRequired(true);
+      onScopeFailure(
+        response.error === "forbidden"
+          ? "Your analytics access changed. Reload the analytics scope."
+          : response.error === "not_found"
+            ? "The selected course no longer exists. Reload the analytics scope."
+            : "Student membership changed. Reload analytics before viewing the roster."
+      );
+      return;
+    }
+    if (
+      response.ok !== true ||
+      response.metric !== request.metric ||
+      !isColumnResult(response)
+    ) {
+      onNotice(
+        `${columnTitles[request.metric]}: Unable to refresh student metrics. Please try again.`
+      );
+      return;
+    }
+    if (
+      !isRecord(response.course) ||
+      response.course.id !== snapshots.course.id ||
+      response.page !== snapshots.page ||
+      response.pageSize !== snapshots.pageSize ||
+      response.totalCount !== snapshots.totalCount ||
+      response.totalPages !== snapshots.totalPages ||
+      response.rows.length !== snapshots.rows.length ||
+      response.rows.some((row, index) => row.id !== snapshots.rows[index].id)
+    ) {
+      setReloadRequired(true);
+      onScopeFailure(
+        "Student membership changed. Reload analytics before viewing the roster."
+      );
+      return;
+    }
+    const result = { asOf: response.asOf, rows: response.rows };
+    setColumns((previous) => ({
+      generation,
+      values: {
+        ...(previous.generation === generation ? previous.values : {}),
+        [request.metric]: result,
+      },
+    }));
+    onNotice(
+      response.rows.some((row) => row.result.state === "error")
+        ? `${columnTitles[request.metric]}: Unable to load student metrics. Please retry.`
+        : `${columnTitles[request.metric]} refreshed at ${new Date(response.asOf).toLocaleString("en-US", { timeZone: "UTC" })} UTC. Other student metrics keep their earlier observation times.`
+    );
+  }, [
+    fetcher.data,
+    fetcher.state,
+    generation,
+    onNotice,
+    onScopeFailure,
+    request,
+    scopeKey,
+    snapshots,
+    updating,
+  ]);
+  const retryColumn = (metric: StudentMetricName) => {
+    const params = new URLSearchParams(location.search);
+    const id = `${generation}:${crypto.randomUUID()}`;
+    params.set("courseId", String(snapshots.course.id));
+    params.set("studentPage", String(snapshots.page));
+    params.set("metric", metric);
+    params.set("requestId", id);
+    params.set("scopeKey", scopeKey);
+    setRequest({ id, generation, metric });
+    onNotice("Updating analytics");
+    void fetcher.load(`/api/analytics/students/retry?${params}`);
+  };
+  const rowMetric = ({
+    row,
+    metric,
+  }: {
+    row: StudentSnapshots["rows"][number];
+    metric: StudentMetricName;
+  }) =>
+    currentColumns[metric]?.rows.find((result) => result.id === row.id)
+      ?.result ?? row[metric];
   const scrollRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
   const [edges, setEdges] = useState({ left: false, right: false });
@@ -102,7 +260,7 @@ export function AnalyticsStudentTable({
     label: string;
     enabled: boolean;
   }) =>
-    enabled && !disabled ? (
+    enabled && !busy ? (
       <Link
         to={pageHref(page)}
         aria-label={`Go to student page ${page}`}
@@ -120,10 +278,25 @@ export function AnalyticsStudentTable({
     );
   const overflow = edges.left || edges.right;
   const showHint = inView && overflow && !hasScrolled;
+  if (reloadRequired)
+    return (
+      <section>
+        <p>
+          Student access or membership changed. Reload analytics before viewing
+          the roster.
+        </p>
+        <a
+          href={`${location.pathname}${location.search}`}
+          className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          Reload analytics
+        </a>
+      </section>
+    );
   return (
     <section
       aria-labelledby="student-snapshots-title"
-      aria-busy={updating}
+      aria-busy={updating || fetcher.state !== "idle"}
       className="min-w-0 space-y-3"
     >
       <h2 id="student-snapshots-title" className="text-xl font-semibold">
@@ -143,6 +316,50 @@ export function AnalyticsStudentTable({
         . Quiz averages use each student’s best attempt per quiz in the selected
         period.
       </p>
+      {(["studentProgress", "quizAverage"] satisfies StudentMetricName[]).map(
+        (metric) => {
+          const refreshed = currentColumns[metric];
+          const hasError = snapshots.rows.some(
+            (row) => rowMetric({ row, metric }).state === "error"
+          );
+          return (
+            (hasError || refreshed) && (
+              <div
+                key={metric}
+                className="flex flex-wrap items-center gap-2 text-sm"
+              >
+                {hasError && (
+                  <>
+                    <span>
+                      {columnTitles[metric]}: Unable to load student metrics.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => retryColumn(metric)}
+                      disabled={busy}
+                      className="rounded-md border px-3 py-2 underline disabled:cursor-not-allowed disabled:bg-muted disabled:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                    >
+                      Retry {columnTitles[metric]}
+                    </button>
+                  </>
+                )}
+                {refreshed && (
+                  <p>
+                    {columnTitles[metric]} column refreshed at{" "}
+                    <time dateTime={refreshed.asOf}>
+                      {new Date(refreshed.asOf).toLocaleString("en-US", {
+                        timeZone: "UTC",
+                      })}{" "}
+                      UTC
+                    </time>
+                    . Other columns retain their previous observation times.
+                  </p>
+                )}
+              </div>
+            )
+          );
+        }
+      )}
       {snapshots.rows.length === 0 ? (
         <div className="rounded-lg border border-dashed p-6">
           <p>
@@ -220,10 +437,15 @@ export function AnalyticsStudentTable({
                         </time>
                       </td>
                       <td className="border-b px-4 py-4">
-                        <StudentMetric metric={row.studentProgress} />
+                        <StudentMetric
+                          metric={rowMetric({ row, metric: "studentProgress" })}
+                        />
                       </td>
                       <td className="border-b px-4 py-4">
-                        <StudentMetric metric={row.quizAverage} quiz />
+                        <StudentMetric
+                          metric={rowMetric({ row, metric: "quizAverage" })}
+                          quiz
+                        />
                       </td>
                     </tr>
                   ))}

@@ -16,6 +16,7 @@ import {
   analyticsMetricNames,
   getCourseAnalytics,
   getStudentQuizAverage,
+  getStudentSnapshotMetric,
   getAnalyticsOverview,
   getAnalyticsMetric,
   getPurchaseTotal,
@@ -1636,6 +1637,204 @@ describe("student snapshot enrollment boundaries", () => {
           },
         ],
       },
+    });
+  });
+});
+
+describe("student snapshot metric retries", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("recovers only the requested column with a fresh observation time and no PII", () => {
+    const [lesson] = createLessons({ courseId: base.course.id, count: 1 });
+    const quiz = createQuiz(lesson.id, "Retry quiz");
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    const options = { userId: base.instructor.id, courseId: base.course.id };
+    testDb.$client.exec(
+      "ALTER TABLE lesson_progress RENAME TO unavailable_lesson_progress"
+    );
+    expect(getCourseAnalytics(options)).toMatchObject({
+      studentSnapshots: {
+        rows: [
+          {
+            studentProgress: { state: "error", reason: "read_failed" },
+          },
+        ],
+      },
+    });
+    testDb.$client.exec(
+      "ALTER TABLE unavailable_lesson_progress RENAME TO lesson_progress"
+    );
+    testDb
+      .insert(schema.lessonProgress)
+      .values({
+        userId: base.user.id,
+        lessonId: lesson.id,
+        status: schema.LessonProgressStatus.Completed,
+      })
+      .run();
+    testDb.$client.exec(
+      "ALTER TABLE quiz_attempts RENAME TO unavailable_quiz_attempts"
+    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-26T01:00:00.000Z"));
+    try {
+      const retry = getStudentSnapshotMetric({
+        ...options,
+        metric: "studentProgress",
+      });
+      expect(retry).toEqual({
+        ok: true,
+        asOf: "2026-09-26T01:00:00.000Z",
+        metric: "studentProgress",
+        course: { id: base.course.id, title: base.course.title },
+        page: 1,
+        pageSize: 20,
+        totalCount: 1,
+        totalPages: 1,
+        rows: [{ id: base.user.id, result: { state: "value", value: 100 } }],
+      });
+      expect(JSON.stringify(retry)).not.toContain(base.user.email);
+      expect(JSON.stringify(retry)).not.toContain(base.user.name);
+    } finally {
+      vi.useRealTimers();
+    }
+    testDb.$client.exec(
+      "ALTER TABLE unavailable_quiz_attempts RENAME TO quiz_attempts"
+    );
+    attempt({ userId: base.user.id, quizId: quiz.id, score: 0.8 });
+    testDb.$client.exec(
+      "ALTER TABLE lesson_progress RENAME TO unavailable_lesson_progress"
+    );
+    expect(
+      getStudentSnapshotMetric({ ...options, metric: "quizAverage" })
+    ).toMatchObject({
+      ok: true,
+      metric: "quizAverage",
+      rows: [{ id: base.user.id, result: { state: "value", value: 0.8 } }],
+    });
+  });
+});
+
+describe("student snapshot retry scope", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("returns the current eligible page so changed membership cannot be applied to an old roster", () => {
+    const students = Array.from({ length: 21 }, (_, index) =>
+      createStudent(`Retry ${String(index).padStart(2, "0")}`)
+    );
+    testDb
+      .insert(schema.enrollments)
+      .values(
+        students.map((student) => ({
+          userId: student.id,
+          courseId: base.course.id,
+          enrolledAt: "2026-09-02T00:00:00.000Z",
+        }))
+      )
+      .run();
+    const options = {
+      userId: base.instructor.id,
+      courseId: base.course.id,
+      studentPage: 2,
+      start: "2026-09-01T00:00:00.000Z",
+      end: "2026-09-10T00:00:00.000Z",
+    };
+    expect(
+      getStudentSnapshotMetric({ ...options, metric: "quizAverage" })
+    ).toMatchObject({
+      page: 2,
+      pageSize: 20,
+      totalCount: 21,
+      totalPages: 2,
+      rows: [
+        {
+          id: students[20].id,
+          result: { state: "unavailable", reason: "no_quizzes" },
+        },
+      ],
+    });
+    testDb
+      .delete(schema.enrollments)
+      .where(eq(schema.enrollments.userId, students[0].id))
+      .run();
+    expect(
+      getStudentSnapshotMetric({ ...options, metric: "studentProgress" })
+    ).toMatchObject({
+      page: 2,
+      totalCount: 20,
+      totalPages: 1,
+      rows: [],
+    });
+    expect(
+      getStudentSnapshotMetric({
+        ...options,
+        metric: "studentProgress",
+        studentPage: 0,
+      })
+    ).toEqual({ ok: false, error: "invalid_page" });
+    expect(
+      getStudentSnapshotMetric({
+        ...options,
+        metric: "studentProgress",
+        start: "2099-01-01T00:00:00.000Z",
+        end: "2099-02-01T00:00:00.000Z",
+      })
+    ).toMatchObject({ totalCount: 0, rows: [] });
+  });
+
+  it("reauthorizes retry ownership, role, Admin instructor scope and deleted courses", () => {
+    const owner = testDb
+      .insert(schema.users)
+      .values({
+        name: "Retry Owner",
+        email: "retry-owner@example.com",
+        role: schema.UserRole.Instructor,
+      })
+      .returning()
+      .get();
+    const admin = createAdmin();
+    const course = createCourse(base.instructor.id, "Retry ownership");
+    const options = {
+      userId: base.instructor.id,
+      courseId: course.id,
+      metric: "quizAverage",
+    } as const;
+    expect(getStudentSnapshotMetric(options)).toMatchObject({ ok: true });
+    testDb
+      .update(schema.courses)
+      .set({ instructorId: owner.id })
+      .where(eq(schema.courses.id, course.id))
+      .run();
+    expect(getStudentSnapshotMetric(options)).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(
+      getStudentSnapshotMetric({ ...options, userId: base.user.id })
+    ).toEqual({ ok: false, error: "forbidden" });
+    expect(
+      getStudentSnapshotMetric({ ...options, userId: admin.id })
+    ).toMatchObject({ ok: true });
+    expect(
+      getStudentSnapshotMetric({
+        ...options,
+        userId: admin.id,
+        instructorId: base.instructor.id,
+      })
+    ).toEqual({ ok: false, error: "forbidden" });
+    testDb.delete(schema.courses).where(eq(schema.courses.id, course.id)).run();
+    expect(getStudentSnapshotMetric(options)).toEqual({
+      ok: false,
+      error: "not_found",
     });
   });
 });
