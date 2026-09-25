@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "~/db";
 import {
   courses,
@@ -34,7 +34,9 @@ export type PurchaseTotalResult =
     }
   | { ok: false; error: "forbidden" | "not_found" };
 
-export type AnalyticsOverviewOptions = PurchaseTotalOptions;
+export type AnalyticsOverviewOptions = PurchaseTotalOptions & {
+  coursePage?: number;
+};
 
 export type AnalyticsMetric<T> =
   | { state: "value"; value: T }
@@ -51,7 +53,23 @@ export const analyticsMetricNames = [
 ] as const;
 export type AnalyticsMetricName = (typeof analyticsMetricNames)[number];
 
-export type AnalyticsOverviewResult =
+export type CourseSummary = {
+  id: number;
+  title: string;
+  purchaseTotal: AnalyticsMetric<number>;
+  enrollmentCount: AnalyticsMetric<number>;
+  studentProgress: AnalyticsMetric<number>;
+};
+
+export type CourseSummaries = {
+  rows: CourseSummary[];
+  page: number;
+  pageSize: 20;
+  totalCount: number;
+  totalPages: number;
+};
+
+type AnalyticsOverviewMetricsResult =
   | {
       ok: true;
       asOf: string;
@@ -67,7 +85,14 @@ export type AnalyticsOverviewResult =
     }
   | { ok: false; error: "forbidden" | "not_found" };
 
-type AnalyticsOverviewSuccess = Extract<AnalyticsOverviewResult, { ok: true }>;
+type AnalyticsOverviewSuccess = Extract<
+  AnalyticsOverviewMetricsResult,
+  { ok: true }
+>;
+
+export type AnalyticsOverviewResult =
+  | (AnalyticsOverviewSuccess & { courseSummaries: CourseSummaries })
+  | { ok: false; error: "forbidden" | "not_found" | "invalid_page" };
 
 export type CourseAnalyticsResult =
   | (AnalyticsOverviewSuccess & { course: { id: number; title: string } })
@@ -494,13 +519,221 @@ function readAnalyticsOverview(
   };
 }
 
+function readCourseSummaries(
+  tx: AnalyticsTransaction,
+  scope: Extract<AuthorizedAnalyticsScope, { ok: true }>,
+  options: AnalyticsOverviewOptions
+): CourseSummaries {
+  const page = options.coursePage ?? 1;
+  const pageSize = 20;
+  const totalCount = scope.courses.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  if (totalCount === 0) {
+    return { rows: [], page, pageSize, totalCount, totalPages };
+  }
+
+  const pageConditions = [];
+  if (scope.role === UserRole.Instructor)
+    pageConditions.push(eq(courses.instructorId, options.userId));
+  if (scope.role === UserRole.Admin && options.instructorId !== undefined)
+    pageConditions.push(eq(courses.instructorId, options.instructorId));
+  if (options.courseId !== undefined)
+    pageConditions.push(eq(courses.id, options.courseId));
+  const pageCourses = tx
+    .select({ id: courses.id, title: courses.title })
+    .from(courses)
+    .where(pageConditions.length ? and(...pageConditions) : undefined)
+    .orderBy(asc(courses.title), asc(courses.id))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize)
+    .all();
+  if (pageCourses.length === 0) {
+    return { rows: [], page, pageSize, totalCount, totalPages };
+  }
+  const courseIds = pageCourses.map((course) => course.id);
+  const purchaseConditions = [inArray(purchases.courseId, courseIds)];
+  if (options.start)
+    purchaseConditions.push(gte(purchases.createdAt, options.start));
+  if (options.end)
+    purchaseConditions.push(lt(purchases.createdAt, options.end));
+  const enrollmentConditions = [inArray(enrollments.courseId, courseIds)];
+  if (options.start)
+    enrollmentConditions.push(gte(enrollments.enrolledAt, options.start));
+  if (options.end)
+    enrollmentConditions.push(lt(enrollments.enrolledAt, options.end));
+  const failed: AnalyticsMetric<number> = {
+    state: "error",
+    reason: "read_failed",
+  };
+  const empty: AnalyticsMetric<number> = {
+    state: "empty",
+    reason: "no_records",
+  };
+
+  let purchaseTotals: Map<number, number> | null = null;
+  try {
+    purchaseTotals = new Map(
+      tx
+        .select({
+          courseId: purchases.courseId,
+          cents: sql<number>`sum(${purchases.pricePaid})`,
+        })
+        .from(purchases)
+        .where(and(...purchaseConditions))
+        .groupBy(purchases.courseId)
+        .all()
+        .map((row) => [row.courseId, row.cents])
+    );
+  } catch {
+    // Preserve other summaries when one metric cannot be read.
+  }
+
+  let enrollmentCounts: Map<number, number> | null = null;
+  let eligibleEnrollments: { courseId: number; userId: number }[] | null = null;
+  try {
+    eligibleEnrollments = tx
+      .select({ courseId: enrollments.courseId, userId: enrollments.userId })
+      .from(enrollments)
+      .where(and(...enrollmentConditions))
+      .groupBy(enrollments.courseId, enrollments.userId)
+      .all();
+    enrollmentCounts = new Map();
+    for (const row of eligibleEnrollments) {
+      enrollmentCounts.set(
+        row.courseId,
+        (enrollmentCounts.get(row.courseId) ?? 0) + 1
+      );
+    }
+  } catch {
+    // Progress can still report its own read failure independently.
+  }
+
+  let progressByCourse: Map<number, AnalyticsMetric<number>> | null = null;
+  if (eligibleEnrollments !== null) {
+    try {
+      const lessonCounts = new Map(
+        tx
+          .select({
+            courseId: modules.courseId,
+            count: sql<number>`count(${lessons.id})`,
+          })
+          .from(lessons)
+          .innerJoin(modules, eq(lessons.moduleId, modules.id))
+          .where(inArray(modules.courseId, courseIds))
+          .groupBy(modules.courseId)
+          .all()
+          .map((row) => [row.courseId, row.count])
+      );
+      const completionConditions = [
+        inArray(modules.courseId, courseIds),
+        eq(lessonProgress.status, LessonProgressStatus.Completed),
+      ];
+      if (options.start)
+        completionConditions.push(gte(enrollments.enrolledAt, options.start));
+      if (options.end)
+        completionConditions.push(lt(enrollments.enrolledAt, options.end));
+      const completions = tx
+        .select({
+          courseId: modules.courseId,
+          userId: lessonProgress.userId,
+          lessonId: lessonProgress.lessonId,
+        })
+        .from(lessonProgress)
+        .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
+        .innerJoin(modules, eq(lessons.moduleId, modules.id))
+        .innerJoin(
+          enrollments,
+          and(
+            eq(enrollments.userId, lessonProgress.userId),
+            eq(enrollments.courseId, modules.courseId)
+          )
+        )
+        .where(and(...completionConditions))
+        .groupBy(
+          modules.courseId,
+          lessonProgress.userId,
+          lessonProgress.lessonId
+        )
+        .all();
+      const completedCounts = new Map<number, number>();
+      for (const row of completions) {
+        completedCounts.set(
+          row.courseId,
+          (completedCounts.get(row.courseId) ?? 0) + 1
+        );
+      }
+      const possibleCounts = new Map<number, number>();
+      for (const row of eligibleEnrollments) {
+        possibleCounts.set(
+          row.courseId,
+          (possibleCounts.get(row.courseId) ?? 0) +
+            (lessonCounts.get(row.courseId) ?? 0)
+        );
+      }
+      progressByCourse = new Map();
+      for (const course of pageCourses) {
+        const enrolled = enrollmentCounts?.get(course.id) ?? 0;
+        const possible = possibleCounts.get(course.id) ?? 0;
+        progressByCourse.set(
+          course.id,
+          enrolled === 0
+            ? empty
+            : possible === 0
+              ? { state: "unavailable", reason: "no_lessons" }
+              : {
+                  state: "value",
+                  value:
+                    ((completedCounts.get(course.id) ?? 0) / possible) * 100,
+                }
+        );
+      }
+    } catch {
+      // A failed progress read does not hide purchases or enrollment counts.
+    }
+  }
+
+  return {
+    rows: pageCourses.map((course) => ({
+      ...course,
+      purchaseTotal:
+        purchaseTotals === null
+          ? failed
+          : purchaseTotals.has(course.id)
+            ? { state: "value", value: purchaseTotals.get(course.id) ?? 0 }
+            : empty,
+      enrollmentCount:
+        enrollmentCounts === null
+          ? failed
+          : enrollmentCounts.has(course.id)
+            ? { state: "value", value: enrollmentCounts.get(course.id) ?? 0 }
+            : empty,
+      studentProgress: progressByCourse?.get(course.id) ?? failed,
+    })),
+    page,
+    pageSize,
+    totalCount,
+    totalPages,
+  };
+}
+
 export function getAnalyticsOverview(
   options: AnalyticsOverviewOptions
 ): AnalyticsOverviewResult {
   return db.transaction((tx) => {
     const scope = getAuthorizedScope(tx, options);
     if (!scope.ok) return scope;
-    return readAnalyticsOverview(tx, scope, options);
+    const page = options.coursePage ?? 1;
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      !Number.isSafeInteger((page - 1) * 20)
+    ) {
+      return { ok: false, error: "invalid_page" };
+    }
+    return {
+      ...readAnalyticsOverview(tx, scope, options),
+      courseSummaries: readCourseSummaries(tx, scope, options),
+    };
   });
 }
 

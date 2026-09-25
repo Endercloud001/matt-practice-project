@@ -762,3 +762,208 @@ describe("analyticsService Student Progress", () => {
     ).toEqual({ ok: false, error: "not_found" });
   });
 });
+
+describe("analyticsService course summaries", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("paginates authorized courses by title then id while keeping overview totals scoped to all courses", () => {
+    const otherInstructor = testDb
+      .insert(schema.users)
+      .values({
+        name: "Other",
+        email: "summaries-other@example.com",
+        role: schema.UserRole.Instructor,
+      })
+      .returning()
+      .get();
+    const foreignCourse = createCourse(otherInstructor.id, "A Foreign Course");
+    const sameTitleCourses = Array.from({ length: 21 }, (_, index) =>
+      createCourse(
+        base.instructor.id,
+        index < 2
+          ? `A Shared Course ${index}`
+          : `Course ${String(index).padStart(2, "0")}`
+      )
+    );
+    testDb
+      .update(schema.courses)
+      .set({ title: "A Shared Course" })
+      .where(eq(schema.courses.id, sameTitleCourses[0].id))
+      .run();
+    testDb
+      .update(schema.courses)
+      .set({ title: "A Shared Course" })
+      .where(eq(schema.courses.id, sameTitleCourses[1].id))
+      .run();
+    purchase(sameTitleCourses[20].id, 2500, "2025-03-01T00:00:00.000Z");
+    purchase(foreignCourse.id, 9000, "2025-03-01T00:00:00.000Z");
+
+    const first = getAnalyticsOverview({
+      userId: base.instructor.id,
+      coursePage: 1,
+    });
+    const second = getAnalyticsOverview({
+      userId: base.instructor.id,
+      coursePage: 2,
+    });
+
+    expect(first).toMatchObject({
+      ok: true,
+      courseSummaries: { page: 1, pageSize: 20, totalCount: 22, totalPages: 2 },
+      purchaseTotal: { state: "value", value: 2500 },
+    });
+    expect(second).toMatchObject({
+      ok: true,
+      courseSummaries: { page: 2, pageSize: 20, totalCount: 22, totalPages: 2 },
+      purchaseTotal: { state: "value", value: 2500 },
+    });
+    if (!first.ok || !second.ok)
+      throw new Error("Expected authorized analytics");
+    expect(first.courseSummaries.rows).toHaveLength(20);
+    expect(second.courseSummaries.rows).toHaveLength(2);
+    expect(first.courseSummaries.rows.slice(0, 2).map((row) => row.id)).toEqual(
+      sameTitleCourses.slice(0, 2).map((course) => course.id)
+    );
+    expect(
+      new Set(
+        [...first.courseSummaries.rows, ...second.courseSummaries.rows].map(
+          (row) => row.id
+        )
+      ).size
+    ).toBe(22);
+    expect(second.courseSummaries.rows.map((row) => row.id)).not.toContain(
+      foreignCourse.id
+    );
+    expect(JSON.stringify(first.courseSummaries)).not.toContain(
+      base.user.email
+    );
+  });
+
+  it("uses period-filtered distinct enrollments and course lessons for each row", () => {
+    const otherCourse = createCourse(base.instructor.id, "Second Summary");
+    const [firstLesson, secondLesson] = createLessons({
+      courseId: base.course.id,
+      count: 2,
+    });
+    createLessons({ courseId: otherCourse.id, count: 1 });
+    testDb
+      .insert(schema.enrollments)
+      .values([
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-01T00:00:00.000Z",
+        },
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-02T00:00:00.000Z",
+        },
+        {
+          userId: base.user.id,
+          courseId: otherCourse.id,
+          enrolledAt: "2025-02-28T23:59:59.999Z",
+        },
+      ])
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values([
+        {
+          userId: base.user.id,
+          lessonId: firstLesson.id,
+          status: schema.LessonProgressStatus.Completed,
+        },
+        {
+          userId: base.user.id,
+          lessonId: firstLesson.id,
+          status: schema.LessonProgressStatus.Completed,
+        },
+        {
+          userId: base.user.id,
+          lessonId: secondLesson.id,
+          status: schema.LessonProgressStatus.InProgress,
+        },
+      ])
+      .run();
+    purchase(base.course.id, 0, "2025-03-01T00:00:00.000Z");
+    purchase(otherCourse.id, 500, "2025-03-10T00:00:00.000Z");
+
+    const result = getAnalyticsOverview({
+      userId: base.instructor.id,
+      start: "2025-03-01T00:00:00.000Z",
+      end: "2025-03-10T00:00:00.000Z",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      purchaseTotal: { state: "value", value: 0 },
+      enrollmentCount: { state: "value", value: 1 },
+      studentProgress: { state: "value", value: 50 },
+    });
+    if (!result.ok) throw new Error("Expected authorized analytics");
+    expect(
+      result.courseSummaries.rows.find((row) => row.id === base.course.id)
+    ).toMatchObject({
+      purchaseTotal: { state: "value", value: 0 },
+      enrollmentCount: { state: "value", value: 1 },
+      studentProgress: { state: "value", value: 50 },
+    });
+    expect(
+      result.courseSummaries.rows.find((row) => row.id === otherCourse.id)
+    ).toMatchObject({
+      purchaseTotal: { state: "empty", reason: "no_records" },
+      enrollmentCount: { state: "empty", reason: "no_records" },
+      studentProgress: { state: "empty", reason: "no_records" },
+    });
+  });
+
+  it("keeps sibling row metrics available when purchases cannot be read", () => {
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    testDb.$client.exec(
+      "ALTER TABLE purchases RENAME TO unavailable_purchases"
+    );
+
+    const result = getAnalyticsOverview({ userId: base.instructor.id });
+
+    expect(result).toMatchObject({
+      ok: true,
+      courseSummaries: {
+        rows: [
+          {
+            purchaseTotal: { state: "error", reason: "read_failed" },
+            enrollmentCount: { state: "value", value: 1 },
+            studentProgress: { state: "unavailable", reason: "no_lessons" },
+          },
+        ],
+      },
+    });
+  });
+
+  it("returns empty rows after the last page and rejects invalid numeric pages", () => {
+    expect(
+      getAnalyticsOverview({ userId: base.instructor.id, coursePage: 3 })
+    ).toMatchObject({
+      ok: true,
+      courseSummaries: { page: 3, totalPages: 1, totalCount: 1, rows: [] },
+    });
+    expect(
+      getAnalyticsOverview({ userId: base.instructor.id, coursePage: 0 })
+    ).toEqual({
+      ok: false,
+      error: "invalid_page",
+    });
+    expect(
+      getAnalyticsOverview({ userId: base.instructor.id, coursePage: 1.5 })
+    ).toEqual({
+      ok: false,
+      error: "invalid_page",
+    });
+  });
+});
