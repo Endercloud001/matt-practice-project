@@ -64,6 +64,9 @@ export async function loadAnalyticsPage({
     ...(query.start ? { start: query.start } : {}),
     ...(query.end ? { end: query.end } : {}),
     ...(query.coursePage !== undefined ? { coursePage: query.coursePage } : {}),
+    ...(query.studentPage !== undefined
+      ? { studentPage: query.studentPage }
+      : {}),
   };
   const result =
     courseId === undefined

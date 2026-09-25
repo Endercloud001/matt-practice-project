@@ -70,6 +70,52 @@ describe("Instructor Analytics page loader", () => {
     expect(JSON.stringify(payload)).not.toContain(base.user.email);
   });
 
+  it("pages only an explicitly selected course roster independently of summaries", async () => {
+    const students = testDb
+      .insert(schema.users)
+      .values(
+        Array.from({ length: 21 }, (_, index) => ({
+          name: `Roster ${String(index).padStart(2, "0")}`,
+          email: `roster-${index}@example.test`,
+          role: schema.UserRole.Student,
+        }))
+      )
+      .returning()
+      .all();
+    testDb
+      .insert(schema.enrollments)
+      .values(
+        students.map((student) => ({
+          userId: student.id,
+          courseId: base.course.id,
+          enrolledAt: "2026-09-02T00:00:00.000Z",
+        }))
+      )
+      .run();
+    const query = `?courseId=${base.course.id}&studentPage=2&range=custom&start=2026-09-01&end=2026-10-01`;
+    const response = await callLoader(query);
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      studentSnapshots: {
+        page: 2,
+        pageSize: 20,
+        totalCount: 21,
+        rows: [{ name: "Roster 20", email: "roster-20@example.test" }],
+      },
+      courseSummaries: { page: 1 },
+    });
+    expect(payload.studentSnapshots.rows).toHaveLength(1);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    const implicit = await (await callLoader("?studentPage=2")).json();
+    expect(implicit).not.toHaveProperty("studentSnapshots");
+    expect(JSON.stringify(implicit)).not.toContain("roster-20@example.test");
+    const reset = await (
+      await callLoader(`?courseId=${base.course.id}&range=all`)
+    ).json();
+    expect(reset.studentSnapshots.page).toBe(1);
+  });
+
   it("renders one loading announcement and hides decorative fallback skeletons", () => {
     const markup = renderToStaticMarkup(createElement(HydrateFallback));
     expect(markup.match(/role="status"/g)).toHaveLength(1);

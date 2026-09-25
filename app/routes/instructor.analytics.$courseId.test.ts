@@ -52,6 +52,20 @@ describe("course analytics loader", () => {
     expect(JSON.stringify(payload)).not.toContain(base.user.name);
   });
 
+  it.each(["0", "-1", "1.5", "abc", "9007199254740992"])(
+    "rejects invalid student page %s without returning a roster",
+    async (page) => {
+      const response = await callLoader({ query: `?studentPage=${page}` });
+      expect(response.status).toBe(400);
+      const payload = await response.json();
+      expect(payload).toMatchObject({
+        error: "invalid_query",
+        fields: { studentPage: expect.any(Array) },
+      });
+      expect(payload).not.toHaveProperty("studentSnapshots");
+    }
+  );
+
   it("exposes quiz outcome metrics through the course loader", async () => {
     const courseModule = testDb
       .insert(schema.modules)
@@ -113,6 +127,14 @@ describe("course analytics loader", () => {
       })
       .returning()
       .get();
+    testDb
+      .insert(schema.enrollments)
+      .values({
+        userId: base.user.id,
+        courseId: base.course.id,
+        enrolledAt: "2026-09-02T00:00:00.000Z",
+      })
+      .run();
     expect((await callLoader()).status).toBe(200);
     testDb
       .update(schema.courses)
@@ -122,6 +144,10 @@ describe("course analytics loader", () => {
     const forbidden = await callLoader();
     expect(forbidden.status).toBe(403);
     expect(await forbidden.json()).toEqual({ ok: false, error: "forbidden" });
+    testDb
+      .delete(schema.enrollments)
+      .where(eq(schema.enrollments.courseId, base.course.id))
+      .run();
     testDb
       .delete(schema.courses)
       .where(eq(schema.courses.id, base.course.id))

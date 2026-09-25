@@ -2,6 +2,7 @@ import { UserRole } from "~/db/schema";
 import type {
   AnalyticsMetric,
   CourseSummaries,
+  StudentSnapshots,
 } from "~/services/analyticsService";
 
 type Range = "all" | "last7days" | "last30days" | "lastYear" | "custom";
@@ -25,6 +26,7 @@ export type AnalyticsPageData = {
   viewer: { name: string; role: UserRole };
   filters: { instructorId: number | null; courseId: number | null };
   courseSummaries?: CourseSummaries;
+  studentSnapshots?: StudentSnapshots;
 };
 export type AnalyticsPageError = {
   course?: { id: number; title: string };
@@ -40,7 +42,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isMetricResult(value: unknown): value is MetricResult {
+export function isMetricResult(value: unknown): value is MetricResult {
   if (!isRecord(value) || typeof value.state !== "string") return false;
   if (value.state === "value") return typeof value.value === "number";
   if (value.state === "empty")
@@ -76,6 +78,30 @@ function isCourseSummaries(value: unknown): value is CourseSummaries {
         isMetricResult(row.purchaseTotal) &&
         isMetricResult(row.enrollmentCount) &&
         isMetricResult(row.studentProgress)
+    )
+  );
+}
+
+function isStudentSnapshots(value: unknown): value is StudentSnapshots {
+  return (
+    isRecord(value) &&
+    isRecord(value.course) &&
+    typeof value.course.id === "number" &&
+    typeof value.course.title === "string" &&
+    value.pageSize === 20 &&
+    ["page", "totalCount", "totalPages"].every(
+      (key) => typeof value[key] === "number"
+    ) &&
+    Array.isArray(value.rows) &&
+    value.rows.every(
+      (row) =>
+        isRecord(row) &&
+        typeof row.id === "number" &&
+        typeof row.name === "string" &&
+        typeof row.email === "string" &&
+        typeof row.enrolledAt === "string" &&
+        isMetricResult(row.studentProgress) &&
+        isMetricResult(row.quizAverage)
     )
   );
 }
@@ -125,6 +151,12 @@ export function isAnalyticsPageData(
       value.filters.instructorId === null) &&
     (typeof value.filters.courseId === "number" ||
       value.filters.courseId === null) &&
+    (value.studentSnapshots === undefined ||
+      (isStudentSnapshots(value.studentSnapshots) &&
+        value.studentSnapshots.course.id ===
+          (isRecord(value.course)
+            ? value.course.id
+            : value.filters.courseId))) &&
     (value.course !== undefined
       ? isMetricResult(value.averageBestAttemptQuizScore) &&
         isMetricResult(value.participatingStudents) &&
