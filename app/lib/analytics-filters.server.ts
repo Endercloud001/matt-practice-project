@@ -14,6 +14,7 @@ export type AnalyticsFilters = {
   start?: string;
   end?: string;
   coursePage?: number;
+  studentPage?: number;
 };
 
 export function parseAnalyticsFilters(
@@ -59,6 +60,21 @@ export function parseAnalyticsFilters(
     }
   }
   const startRaw = searchParams.get("start");
+  const rawStudentPage = searchParams.get("studentPage");
+  let studentPage: number | undefined;
+  if (rawStudentPage !== null && rawStudentPage !== "") {
+    const page = Number(rawStudentPage);
+    if (
+      !/^\d+$/.test(rawStudentPage) ||
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      !Number.isSafeInteger((page - 1) * 20)
+    ) {
+      fields.studentPage = ["Enter a positive student page number."];
+    } else {
+      studentPage = page;
+    }
+  }
   const endRaw = searchParams.get("end");
 
   const readDate = (raw: string | null, field: "start" | "end") => {
@@ -112,6 +128,7 @@ export function parseAnalyticsFilters(
           ...(start ? { start } : {}),
           ...(end ? { end } : {}),
           ...(coursePage !== undefined ? { coursePage } : {}),
+          ...(studentPage !== undefined ? { studentPage } : {}),
         },
         fields,
       };

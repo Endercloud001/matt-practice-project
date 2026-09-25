@@ -1198,3 +1198,444 @@ describe("analyticsService course summaries", () => {
     });
   });
 });
+
+describe("analyticsService student snapshots", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("returns full identity only for an explicitly authorized course", () => {
+    testDb
+      .insert(schema.enrollments)
+      .values({
+        userId: base.user.id,
+        courseId: base.course.id,
+        enrolledAt: "2026-09-02T00:00:00.000Z",
+      })
+      .run();
+    const overview = getAnalyticsOverview({ userId: base.instructor.id });
+    expect(overview).not.toHaveProperty("studentSnapshots");
+    expect(JSON.stringify(overview)).not.toContain(base.user.email);
+    const expected = {
+      course: { id: base.course.id, title: base.course.title },
+      page: 1,
+      pageSize: 20,
+      totalCount: 1,
+      totalPages: 1,
+      rows: [
+        {
+          id: base.user.id,
+          name: base.user.name,
+          email: base.user.email,
+          enrolledAt: "2026-09-02T00:00:00.000Z",
+          studentProgress: { state: "unavailable", reason: "no_lessons" },
+          quizAverage: { state: "unavailable", reason: "no_quizzes" },
+        },
+      ],
+    };
+    expect(
+      getAnalyticsOverview({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+      })
+    ).toMatchObject({ ok: true, studentSnapshots: expected });
+    expect(
+      getCourseAnalytics({ userId: createAdmin().id, courseId: base.course.id })
+    ).toMatchObject({ ok: true, studentSnapshots: expected });
+  });
+});
+
+describe("student snapshot row metrics", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("uses current distinct lesson completions and in-period per-quiz best attempts", () => {
+    const [first, second] = createLessons({
+      courseId: base.course.id,
+      count: 2,
+    });
+    const quizA = createQuiz(first.id, "A");
+    const quizB = createQuiz(second.id, "B");
+    const noAttempts = createStudent("No Attempts");
+    const zeroScore = createStudent("Zero Score");
+    testDb
+      .insert(schema.enrollments)
+      .values(
+        [base.user, noAttempts, zeroScore].map((student) => ({
+          userId: student.id,
+          courseId: base.course.id,
+          enrolledAt: "2026-09-02T00:00:00.000Z",
+        }))
+      )
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values(
+        [1, 2].map(() => ({
+          userId: base.user.id,
+          lessonId: first.id,
+          status: schema.LessonProgressStatus.Completed,
+        }))
+      )
+      .run();
+    for (const [quizId, score, attemptedAt] of [
+      [quizA.id, 1, "2026-08-31T23:59:59.999Z"],
+      [quizA.id, 0.4, "2026-09-01T00:00:00.000Z"],
+      [quizA.id, 0.8, "2026-09-03T00:00:00.000Z"],
+      [quizB.id, 0.6, "2026-09-03T00:00:00.000Z"],
+      [quizB.id, 1, "2026-09-10T00:00:00.000Z"],
+    ] satisfies [number, number, string][]) {
+      attempt({ userId: base.user.id, quizId, score, attemptedAt });
+    }
+    attempt({
+      userId: zeroScore.id,
+      quizId: quizA.id,
+      score: 0,
+      attemptedAt: "2026-09-02T00:00:00.000Z",
+    });
+    const result = getCourseAnalytics({
+      userId: base.instructor.id,
+      courseId: base.course.id,
+      start: "2026-09-01T00:00:00.000Z",
+      end: "2026-09-10T00:00:00.000Z",
+    });
+    if (!result.ok) throw new Error("Expected authorized course");
+    expect(
+      result.studentSnapshots.rows.find((row) => row.id === base.user.id)
+    ).toMatchObject({
+      studentProgress: { state: "value", value: 50 },
+      quizAverage: { state: "value", value: 0.7 },
+    });
+    expect(
+      result.studentSnapshots.rows.find((row) => row.id === noAttempts.id)
+    ).toMatchObject({
+      studentProgress: { state: "value", value: 0 },
+      quizAverage: { state: "empty", reason: "no_attempts" },
+    });
+    expect(
+      result.studentSnapshots.rows.find((row) => row.id === zeroScore.id)
+    ).toMatchObject({
+      quizAverage: { state: "value", value: 0 },
+    });
+  });
+});
+
+describe("student snapshot pagination and scope", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("rejects unsafe student page numbers after authorization", () => {
+    for (const studentPage of [
+      0,
+      -1,
+      1.5,
+      NaN,
+      Infinity,
+      Number.MAX_SAFE_INTEGER,
+    ]) {
+      const options = {
+        userId: base.instructor.id,
+        courseId: base.course.id,
+        studentPage,
+      };
+      expect(getCourseAnalytics(options)).toEqual({
+        ok: false,
+        error: "invalid_page",
+      });
+      expect(getAnalyticsOverview(options)).toEqual({
+        ok: false,
+        error: "invalid_page",
+      });
+    }
+    expect(
+      getCourseAnalytics({
+        userId: base.user.id,
+        courseId: base.course.id,
+        studentPage: 0,
+      })
+    ).toEqual({ ok: false, error: "forbidden" });
+  });
+});
+
+describe("student snapshot enrollment boundaries", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("filters before taking earliest enrollment and paginates date/name/id ties independently", () => {
+    const students = Array.from({ length: 23 }, (_, index) =>
+      createStudent(`Roster ${index}`)
+    );
+    for (const student of students) {
+      testDb
+        .update(schema.users)
+        .set({ name: "Same Name" })
+        .where(eq(schema.users.id, student.id))
+        .run();
+      testDb
+        .insert(schema.enrollments)
+        .values([
+          {
+            userId: student.id,
+            courseId: base.course.id,
+            enrolledAt: "2026-08-01T00:00:00.000Z",
+          },
+          {
+            userId: student.id,
+            courseId: base.course.id,
+            enrolledAt: "2026-09-02T00:00:00.000Z",
+          },
+          {
+            userId: student.id,
+            courseId: base.course.id,
+            enrolledAt: "2026-09-08T00:00:00.000Z",
+          },
+        ])
+        .run();
+    }
+    testDb
+      .update(schema.users)
+      .set({ name: "A First" })
+      .where(eq(schema.users.id, students[21].id))
+      .run();
+    testDb
+      .delete(schema.enrollments)
+      .where(eq(schema.enrollments.userId, students[22].id))
+      .run();
+    testDb
+      .insert(schema.enrollments)
+      .values({
+        userId: students[22].id,
+        courseId: base.course.id,
+        enrolledAt: "2026-09-09T00:00:00.000Z",
+      })
+      .run();
+    const options = {
+      userId: base.instructor.id,
+      courseId: base.course.id,
+      start: "2026-09-01T00:00:00.000Z",
+      end: "2026-09-10T00:00:00.000Z",
+    };
+    const first = getAnalyticsOverview({ ...options, coursePage: 5 });
+    const second = getAnalyticsOverview({ ...options, studentPage: 2 });
+    if (
+      !first.ok ||
+      !second.ok ||
+      !first.studentSnapshots ||
+      !second.studentSnapshots
+    )
+      throw new Error("Expected snapshots");
+    expect(first.courseSummaries.rows).toEqual([]);
+    expect(first.studentSnapshots).toMatchObject({
+      page: 1,
+      pageSize: 20,
+      totalCount: 23,
+      totalPages: 2,
+    });
+    expect(first.studentSnapshots.rows.map((row) => row.id)).toEqual([
+      students[22].id,
+      students[21].id,
+      ...students.slice(0, 18).map((student) => student.id),
+    ]);
+    expect(second.studentSnapshots.rows.map((row) => row.id)).toEqual(
+      students.slice(18, 21).map((student) => student.id)
+    );
+    expect(second.studentSnapshots.rows.map((row) => row.enrolledAt)).toEqual(
+      Array(3).fill("2026-09-02T00:00:00.000Z")
+    );
+    expect(first.enrollmentCount).toEqual({ state: "value", value: 23 });
+    expect(second.enrollmentCount).toEqual(first.enrollmentCount);
+    expect(getCourseAnalytics({ ...options, studentPage: 3 })).toMatchObject({
+      studentSnapshots: { rows: [], totalCount: 23, totalPages: 2, page: 3 },
+    });
+  });
+
+  it("excludes removed and out-of-period enrollments despite residual progress and returns an empty future roster", () => {
+    const [lesson] = createLessons({ courseId: base.course.id, count: 1 });
+    const removed = createStudent("Removed Student");
+    const before = createStudent("Before Period");
+    const end = createStudent("At End");
+    testDb
+      .insert(schema.enrollments)
+      .values([
+        {
+          userId: base.user.id,
+          courseId: base.course.id,
+          enrolledAt: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          userId: removed.id,
+          courseId: base.course.id,
+          enrolledAt: "2026-09-02T00:00:00.000Z",
+        },
+        {
+          userId: before.id,
+          courseId: base.course.id,
+          enrolledAt: "2026-08-31T23:59:59.999Z",
+        },
+        {
+          userId: end.id,
+          courseId: base.course.id,
+          enrolledAt: "2026-09-10T00:00:00.000Z",
+        },
+      ])
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values(
+        [removed, before, end].map((student) => ({
+          userId: student.id,
+          lessonId: lesson.id,
+          status: schema.LessonProgressStatus.Completed,
+        }))
+      )
+      .run();
+    testDb
+      .delete(schema.enrollments)
+      .where(eq(schema.enrollments.userId, removed.id))
+      .run();
+    const result = getCourseAnalytics({
+      userId: base.instructor.id,
+      courseId: base.course.id,
+      start: "2026-09-01T00:00:00.000Z",
+      end: "2026-09-10T00:00:00.000Z",
+    });
+    expect(result).toMatchObject({
+      studentSnapshots: { totalCount: 1, rows: [{ id: base.user.id }] },
+    });
+    expect(JSON.stringify(result)).not.toContain(removed.email);
+    expect(JSON.stringify(result)).not.toContain(before.email);
+    expect(JSON.stringify(result)).not.toContain(end.email);
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+        start: "2099-01-01T00:00:00.000Z",
+        end: "2099-02-01T00:00:00.000Z",
+      })
+    ).toMatchObject({
+      studentSnapshots: { rows: [], totalCount: 0, totalPages: 1 },
+    });
+  });
+
+  it("reauthorizes before releasing PII after ownership changes and deletion", () => {
+    const other = testDb
+      .insert(schema.users)
+      .values({
+        name: "Other Owner",
+        email: "other-owner@example.com",
+        role: schema.UserRole.Instructor,
+      })
+      .returning()
+      .get();
+    const course = createCourse(base.instructor.id, "Transient course");
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: course.id })
+      .run();
+    const options = { userId: base.instructor.id, courseId: course.id };
+    expect(getCourseAnalytics(options)).toMatchObject({
+      studentSnapshots: { rows: [{ email: base.user.email }] },
+    });
+    testDb
+      .update(schema.courses)
+      .set({ instructorId: other.id })
+      .where(eq(schema.courses.id, course.id))
+      .run();
+    expect(getCourseAnalytics(options)).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(getAnalyticsOverview(options)).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(
+      getAnalyticsOverview({ userId: base.user.id, courseId: course.id })
+    ).toEqual({ ok: false, error: "forbidden" });
+    expect(
+      getAnalyticsOverview({
+        userId: createAdmin().id,
+        courseId: course.id,
+        instructorId: base.instructor.id,
+      })
+    ).toEqual({ ok: false, error: "forbidden" });
+    testDb
+      .delete(schema.enrollments)
+      .where(eq(schema.enrollments.courseId, course.id))
+      .run();
+    testDb.delete(schema.courses).where(eq(schema.courses.id, course.id)).run();
+    expect(getCourseAnalytics(options)).toEqual({
+      ok: false,
+      error: "not_found",
+    });
+    expect(getAnalyticsOverview(options)).toEqual({
+      ok: false,
+      error: "not_found",
+    });
+  });
+
+  it("preserves sibling row metrics on recoverable read failure and shares initial observation time", () => {
+    createLessons({ courseId: base.course.id, count: 1 });
+    testDb
+      .insert(schema.enrollments)
+      .values({ userId: base.user.id, courseId: base.course.id })
+      .run();
+    testDb.$client.exec(
+      "ALTER TABLE lesson_progress RENAME TO unavailable_lesson_progress"
+    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-25T12:00:00.000Z"));
+    try {
+      expect(
+        getCourseAnalytics({
+          userId: base.instructor.id,
+          courseId: base.course.id,
+        })
+      ).toMatchObject({
+        asOf: "2026-09-25T12:00:00.000Z",
+        enrollmentCount: { state: "value", value: 1 },
+        studentSnapshots: {
+          rows: [
+            {
+              email: base.user.email,
+              studentProgress: { state: "error", reason: "read_failed" },
+              quizAverage: { state: "unavailable", reason: "no_quizzes" },
+            },
+          ],
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    testDb.$client.exec(
+      "ALTER TABLE unavailable_lesson_progress RENAME TO lesson_progress"
+    );
+    testDb.$client.exec(
+      "ALTER TABLE quiz_attempts RENAME TO unavailable_quiz_attempts"
+    );
+    const [lesson] = createLessons({ courseId: base.course.id, count: 1 });
+    createQuiz(lesson.id, "Failed attempts");
+    expect(
+      getCourseAnalytics({
+        userId: base.instructor.id,
+        courseId: base.course.id,
+      })
+    ).toMatchObject({
+      studentSnapshots: {
+        rows: [
+          {
+            studentProgress: { state: "value", value: 0 },
+            quizAverage: { state: "error", reason: "read_failed" },
+          },
+        ],
+      },
+    });
+  });
+});

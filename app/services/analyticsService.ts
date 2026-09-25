@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "~/db";
 import {
   courses,
@@ -38,6 +38,7 @@ export type PurchaseTotalResult =
 
 export type AnalyticsOverviewOptions = PurchaseTotalOptions & {
   coursePage?: number;
+  studentPage?: number;
 };
 
 export type AnalyticsMetric<T> =
@@ -80,6 +81,22 @@ export type CourseSummaries = {
   totalPages: number;
 };
 
+export type StudentSnapshots = {
+  course: { id: number; title: string };
+  rows: {
+    id: number;
+    name: string;
+    email: string;
+    enrolledAt: string;
+    studentProgress: AnalyticsMetric<number>;
+    quizAverage: AnalyticsMetric<number>;
+  }[];
+  page: number;
+  pageSize: 20;
+  totalCount: number;
+  totalPages: number;
+};
+
 type AnalyticsOverviewMetricsResult =
   | {
       ok: true;
@@ -102,7 +119,10 @@ type AnalyticsOverviewSuccess = Extract<
 >;
 
 export type AnalyticsOverviewResult =
-  | (AnalyticsOverviewSuccess & { courseSummaries: CourseSummaries })
+  | (AnalyticsOverviewSuccess & {
+      courseSummaries: CourseSummaries;
+      studentSnapshots?: StudentSnapshots;
+    })
   | { ok: false; error: "forbidden" | "not_found" | "invalid_page" };
 
 export type CourseAnalyticsResult =
@@ -111,8 +131,9 @@ export type CourseAnalyticsResult =
       averageBestAttemptQuizScore: AnalyticsMetric<number>;
       participatingStudents: AnalyticsMetric<number>;
       quizCount: AnalyticsMetric<number>;
+      studentSnapshots: StudentSnapshots;
     })
-  | { ok: false; error: "forbidden" | "not_found" };
+  | { ok: false; error: "forbidden" | "not_found" | "invalid_page" };
 
 export type AnalyticsMetricResult =
   | {
@@ -901,6 +922,150 @@ function readCourseSummaries(
   };
 }
 
+function readStudentSnapshots(
+  tx: AnalyticsTransaction,
+  course: StudentSnapshots["course"],
+  options: AnalyticsOverviewOptions
+): StudentSnapshots {
+  const page = options.studentPage ?? 1;
+  const conditions = [eq(enrollments.courseId, course.id)];
+  if (options.start)
+    conditions.push(gte(enrollments.enrolledAt, options.start));
+  if (options.end) conditions.push(lt(enrollments.enrolledAt, options.end));
+  const totalCount =
+    tx
+      .select({ count: sql<number>`count(distinct ${enrollments.userId})` })
+      .from(enrollments)
+      .where(and(...conditions))
+      .get()?.count ?? 0;
+  const enrolledAt = sql<string>`min(${enrollments.enrolledAt})`;
+  const students = tx
+    .select({ id: users.id, name: users.name, email: users.email, enrolledAt })
+    .from(enrollments)
+    .innerJoin(users, eq(enrollments.userId, users.id))
+    .where(and(...conditions))
+    .groupBy(enrollments.userId, enrollments.courseId)
+    .orderBy(desc(enrolledAt), asc(users.name), asc(users.id))
+    .limit(20)
+    .offset((page - 1) * 20)
+    .all();
+  const studentIds = students.map((student) => student.id);
+  const progress = new Map<number, AnalyticsMetric<number>>();
+  const quizAverages = new Map<number, AnalyticsMetric<number>>();
+  const failed: AnalyticsMetric<number> = {
+    state: "error",
+    reason: "read_failed",
+  };
+  if (studentIds.length > 0) {
+    try {
+      const lessonCount =
+        tx
+          .select({ count: sql<number>`count(${lessons.id})` })
+          .from(lessons)
+          .innerJoin(modules, eq(lessons.moduleId, modules.id))
+          .where(eq(modules.courseId, course.id))
+          .get()?.count ?? 0;
+      const completed = new Map(
+        tx
+          .select({
+            userId: lessonProgress.userId,
+            count: sql<number>`count(distinct ${lessonProgress.lessonId})`,
+          })
+          .from(lessonProgress)
+          .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
+          .innerJoin(modules, eq(lessons.moduleId, modules.id))
+          .where(
+            and(
+              eq(modules.courseId, course.id),
+              inArray(lessonProgress.userId, studentIds),
+              eq(lessonProgress.status, LessonProgressStatus.Completed)
+            )
+          )
+          .groupBy(lessonProgress.userId)
+          .all()
+          .map((row) => [row.userId, row.count])
+      );
+      for (const id of studentIds) {
+        progress.set(
+          id,
+          lessonCount === 0
+            ? { state: "unavailable", reason: "no_lessons" }
+            : {
+                state: "value",
+                value: ((completed.get(id) ?? 0) / lessonCount) * 100,
+              }
+        );
+      }
+    } catch {
+      // A failed progress read must not hide identities or quiz scores.
+    }
+    try {
+      const courseQuizzes = tx
+        .select({ id: quizzes.id })
+        .from(quizzes)
+        .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+        .innerJoin(modules, eq(lessons.moduleId, modules.id))
+        .where(eq(modules.courseId, course.id))
+        .all();
+      if (courseQuizzes.length === 0) {
+        for (const id of studentIds)
+          quizAverages.set(id, { state: "unavailable", reason: "no_quizzes" });
+      } else {
+        const attemptConditions = [
+          inArray(
+            quizAttempts.quizId,
+            courseQuizzes.map((quiz) => quiz.id)
+          ),
+          inArray(quizAttempts.userId, studentIds),
+        ];
+        if (options.start)
+          attemptConditions.push(gte(quizAttempts.attemptedAt, options.start));
+        if (options.end)
+          attemptConditions.push(lt(quizAttempts.attemptedAt, options.end));
+        const bestAttempts = tx
+          .select({
+            userId: quizAttempts.userId,
+            score: sql<number>`max(${quizAttempts.score})`,
+          })
+          .from(quizAttempts)
+          .where(and(...attemptConditions))
+          .groupBy(quizAttempts.userId, quizAttempts.quizId)
+          .all();
+        const scores = new Map<number, { total: number; count: number }>();
+        for (const attempt of bestAttempts) {
+          const score = scores.get(attempt.userId) ?? { total: 0, count: 0 };
+          score.total += attempt.score;
+          score.count += 1;
+          scores.set(attempt.userId, score);
+        }
+        for (const id of studentIds) {
+          const score = scores.get(id);
+          quizAverages.set(
+            id,
+            score
+              ? { state: "value", value: score.total / score.count }
+              : { state: "empty", reason: "no_attempts" }
+          );
+        }
+      }
+    } catch {
+      // Preserve independent progress values when quiz reads fail.
+    }
+  }
+  return {
+    course,
+    rows: students.map((student) => ({
+      ...student,
+      studentProgress: progress.get(student.id) ?? failed,
+      quizAverage: quizAverages.get(student.id) ?? failed,
+    })),
+    page,
+    pageSize: 20,
+    totalCount,
+    totalPages: Math.max(1, Math.ceil(totalCount / 20)),
+  };
+}
+
 export function getAnalyticsOverview(
   options: AnalyticsOverviewOptions
 ): AnalyticsOverviewResult {
@@ -908,16 +1073,29 @@ export function getAnalyticsOverview(
     const scope = getAuthorizedScope(tx, options);
     if (!scope.ok) return scope;
     const page = options.coursePage ?? 1;
+    const studentPage = options.studentPage ?? 1;
     if (
       !Number.isSafeInteger(page) ||
       page < 1 ||
-      !Number.isSafeInteger((page - 1) * 20)
+      !Number.isSafeInteger((page - 1) * 20) ||
+      !Number.isSafeInteger(studentPage) ||
+      studentPage < 1 ||
+      !Number.isSafeInteger((studentPage - 1) * 20)
     ) {
       return { ok: false, error: "invalid_page" };
     }
     return {
       ...readAnalyticsOverview(tx, scope, options),
       courseSummaries: readCourseSummaries(tx, scope, options),
+      ...(options.courseId !== undefined && scope.courses[0]
+        ? {
+            studentSnapshots: readStudentSnapshots(
+              tx,
+              scope.courses[0],
+              options
+            ),
+          }
+        : {}),
     };
   });
 }
@@ -930,6 +1108,13 @@ export function getCourseAnalytics(
     if (!scope.ok) return scope;
     const course = scope.courses[0];
     if (!course) return { ok: false, error: "not_found" };
+    const studentPage = options.studentPage ?? 1;
+    if (
+      !Number.isSafeInteger(studentPage) ||
+      studentPage < 1 ||
+      !Number.isSafeInteger((studentPage - 1) * 20)
+    )
+      return { ok: false, error: "invalid_page" };
 
     let quiz: QuizAnalytics;
     try {
@@ -953,6 +1138,7 @@ export function getCourseAnalytics(
       ...readAnalyticsOverview(tx, scope, options),
       course,
       ...quiz,
+      studentSnapshots: readStudentSnapshots(tx, course, options),
     };
   });
 }

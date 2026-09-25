@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { useFetchers, useLocation, useNavigation } from "react-router";
+import { Link, useFetchers, useLocation, useNavigation } from "react-router";
 import { cn } from "~/lib/utils";
 import {
   AnalyticsFilters,
   AnalyticsFilterRecovery,
 } from "~/components/analytics-filters";
 import { RetryMetricCard } from "~/components/analytics-retry-card";
+import { AnalyticsStudentTable } from "~/components/analytics-student-table";
 import {
   isAnalyticsPageData,
   isAnalyticsPageError,
@@ -43,7 +44,13 @@ function SummaryMetric({
   return <span>{metric.value}</span>;
 }
 
-function CourseSummaries({ data }: { data: AnalyticsPageData }) {
+function CourseSummaries({
+  data,
+  disabled,
+}: {
+  data: AnalyticsPageData;
+  disabled: boolean;
+}) {
   const summaries = data.courseSummaries;
   const location = useLocation();
   if (!summaries) return null;
@@ -55,6 +62,8 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
   }
   const pageHref = (page: number) => {
     const params = new URLSearchParams(scopeParams);
+    const studentPage = currentParams.get("studentPage");
+    if (studentPage) params.set("studentPage", studentPage);
     if (page > 1) params.set("coursePage", String(page));
     return `/instructor/analytics?${params}`;
   };
@@ -110,14 +119,14 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
           aria-label="Course summaries pagination"
           className="flex items-center justify-between gap-3 text-sm"
         >
-          {summaries.page > 1 ? (
-            <a
+          {summaries.page > 1 && !disabled ? (
+            <Link
               aria-label={`Go to page ${summaries.page - 1}`}
               className="rounded-md border px-3 py-2 underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-              href={pageHref(summaries.page - 1)}
+              to={pageHref(summaries.page - 1)}
             >
               Previous
-            </a>
+            </Link>
           ) : (
             <span
               aria-disabled="true"
@@ -126,17 +135,17 @@ function CourseSummaries({ data }: { data: AnalyticsPageData }) {
               Previous
             </span>
           )}
-          <span>
+          <span aria-current="page">
             Page {summaries.page} of {summaries.totalPages}
           </span>
-          {summaries.page < summaries.totalPages ? (
-            <a
+          {summaries.page < summaries.totalPages && !disabled ? (
+            <Link
               aria-label={`Go to page ${summaries.page + 1}`}
               className="rounded-md border px-3 py-2 underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-              href={pageHref(summaries.page + 1)}
+              to={pageHref(summaries.page + 1)}
             >
               Next
-            </a>
+            </Link>
           ) : (
             <span
               aria-disabled="true"
@@ -263,6 +272,17 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
     (navigation.location.search !== location.search ||
       navigation.location.pathname !== location.pathname)
   );
+  const nextCourseId = navigation.location
+    ? (navigation.location.pathname.match(
+        /^\/instructor\/analytics\/(\d+)\/?$/
+      )?.[1] ?? new URLSearchParams(navigation.location.search).get("courseId"))
+    : null;
+  const studentScopeChanged = Boolean(
+    navigation.location &&
+    (nextCourseId !== String(data.studentSnapshots?.course.id) ||
+      new URLSearchParams(navigation.location.search).get("instructorId") !==
+        new URLSearchParams(location.search).get("instructorId"))
+  );
   if (scopeFailure?.snapshot === snapshotGeneration) {
     return (
       <div role="alert" className="rounded-xl border border-destructive p-6">
@@ -365,7 +385,9 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           </>
         )}
       </div>
-      {!course && <CourseSummaries data={data} />}
+      {!course && (
+        <CourseSummaries data={data} disabled={stale || retryPending} />
+      )}
       {course && (
         <div className="space-y-3" aria-labelledby="learning-outcomes-title">
           <h2 id="learning-outcomes-title" className="text-xl font-semibold">
@@ -390,6 +412,15 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
             </p>
           )}
         </div>
+      )}
+      {data.studentSnapshots && !studentScopeChanged && (
+        <AnalyticsStudentTable
+          key={data.studentSnapshots.course.id}
+          snapshots={data.studentSnapshots}
+          asOf={data.asOf}
+          disabled={stale || retryPending}
+          updating={stale}
+        />
       )}
     </div>
   );

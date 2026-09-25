@@ -54,6 +54,152 @@ function renderPage(loaderData: unknown, path = "/instructor/analytics") {
 }
 
 describe("analytics page presentation", () => {
+  const studentSnapshots = {
+    course: { id: 7, title: "Learning TypeScript" },
+    rows: [
+      {
+        id: 3,
+        name: "Full Student Name",
+        email: "student@example.com",
+        enrolledAt: "2026-09-02T00:00:00.000Z",
+        studentProgress: { state: "value", value: 50 },
+        quizAverage: { state: "empty", reason: "no_attempts" },
+      },
+    ],
+    page: 1,
+    pageSize: 20,
+    totalCount: 1,
+    totalPages: 1,
+  };
+
+  it("only renders student identities within a matching explicit single-course scope", () => {
+    const allCourses = renderPage({
+      ...data,
+      filters: { instructorId: null, courseId: null },
+    });
+    expect(allCourses).not.toContain("Student snapshots");
+    const selectedCourse = renderPage({ ...data, studentSnapshots });
+    expect(selectedCourse).toContain("Full Student Name");
+    expect(selectedCourse).toContain("student@example.com");
+    expect(selectedCourse.match(/role="status"/g)).toHaveLength(1);
+    const wrongCourse = renderPage({
+      ...data,
+      studentSnapshots: {
+        ...studentSnapshots,
+        course: { id: 9, title: "Other course" },
+      },
+    });
+    expect(wrongCourse).not.toContain("Full Student Name");
+    expect(wrongCourse).not.toContain("student@example.com");
+    const denied = renderPage({
+      ok: false,
+      error: "forbidden",
+      studentSnapshots,
+    });
+    expect(denied).not.toContain("student@example.com");
+  });
+
+  it("preserves the independent student page when changing course-summary pages", () => {
+    const router = createMemoryRouter(
+      [
+        {
+          path: "*",
+          element: (
+            <AnalyticsPage
+              loaderData={{
+                ...data,
+                courseSummaries: {
+                  ...data.courseSummaries,
+                  totalCount: 21,
+                  totalPages: 2,
+                },
+              }}
+            />
+          ),
+        },
+      ],
+      { initialEntries: ["/instructor/analytics?courseId=7&studentPage=3"] }
+    );
+    const markup = renderToStaticMarkup(<RouterProvider router={router} />);
+    expect(markup).toContain(
+      'href="/instructor/analytics?courseId=7&amp;studentPage=3&amp;coursePage=2"'
+    );
+  });
+
+  it("hides old student identities when navigating to a different course", async () => {
+    let finishLoad: (value: null) => void = () => {};
+    const pendingLoad = new Promise<null>((resolve) => {
+      finishLoad = resolve;
+    });
+    const router = createMemoryRouter(
+      [
+        {
+          id: "analytics",
+          path: "*",
+          loader: () => pendingLoad,
+          element: <AnalyticsPage loaderData={{ ...data, studentSnapshots }} />,
+        },
+      ],
+      {
+        initialEntries: ["/instructor/analytics?courseId=7"],
+        hydrationData: { loaderData: { analytics: null } },
+      }
+    );
+    const navigation = router.navigate("/instructor/analytics?courseId=9");
+    const markup = renderToStaticMarkup(<RouterProvider router={router} />);
+    expect(markup).toContain("Updating analytics");
+    expect(markup).not.toContain("student@example.com");
+    expect(markup).not.toContain("Full Student Name");
+    finishLoad(null);
+    await navigation;
+    router.dispose();
+  });
+
+  it("labels retained students and disables pagination while their page updates", async () => {
+    let finishLoad: (value: null) => void = () => {};
+    const pendingLoad = new Promise<null>((resolve) => {
+      finishLoad = resolve;
+    });
+    const router = createMemoryRouter(
+      [
+        {
+          id: "analytics",
+          path: "*",
+          loader: () => pendingLoad,
+          element: (
+            <AnalyticsPage
+              loaderData={{
+                ...data,
+                studentSnapshots: {
+                  ...studentSnapshots,
+                  totalCount: 21,
+                  totalPages: 2,
+                },
+              }}
+            />
+          ),
+        },
+      ],
+      {
+        initialEntries: ["/instructor/analytics?courseId=7"],
+        hydrationData: { loaderData: { analytics: null } },
+      }
+    );
+    const navigation = router.navigate(
+      "/instructor/analytics?courseId=7&studentPage=2"
+    );
+    const markup = renderToStaticMarkup(<RouterProvider router={router} />);
+    expect(markup).toContain("Updating analytics");
+    expect(markup).toContain("Showing previous results");
+    expect(markup).toContain("Student snapshots · Learning TypeScript");
+    expect(markup).toContain("student@example.com");
+    expect(markup).not.toContain('aria-label="Go to student page 2"');
+    expect(markup.match(/role="status"/g)).toHaveLength(1);
+    finishLoad(null);
+    await navigation;
+    router.dispose();
+  });
+
   it("distinguishes overview period-empty progress from course enrollment-empty progress", () => {
     const emptyData = {
       ...data,
