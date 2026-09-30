@@ -296,6 +296,16 @@ function readEnrollmentCount(
   tx: AnalyticsTransaction,
   options: { courseIds: number[]; start?: string; end?: string }
 ) {
+  return readEligibleEnrollments(tx, options).length;
+}
+
+type ProgressScope = { courseIds: number[]; start?: string; end?: string };
+type EligibleEnrollment = { userId: number; courseId: number };
+
+function readEligibleEnrollments(
+  tx: AnalyticsTransaction,
+  options: ProgressScope
+) {
   const conditions = [inArray(enrollments.courseId, options.courseIds)];
   if (options.start)
     conditions.push(gte(enrollments.enrolledAt, options.start));
@@ -305,70 +315,58 @@ function readEnrollmentCount(
     .from(enrollments)
     .where(and(...conditions))
     .groupBy(enrollments.userId, enrollments.courseId)
-    .all().length;
+    .all();
 }
 
-function readStudentProgress(
+function readProgressLessonCounts(
   tx: AnalyticsTransaction,
-  options: { courseIds: number[]; start?: string; end?: string }
-): AnalyticsMetric<number> {
-  const enrollmentConditions = [
-    inArray(enrollments.courseId, options.courseIds),
-  ];
-  if (options.start)
-    enrollmentConditions.push(gte(enrollments.enrolledAt, options.start));
-  if (options.end)
-    enrollmentConditions.push(lt(enrollments.enrolledAt, options.end));
-
-  const eligibleEnrollments = tx
-    .select({ userId: enrollments.userId, courseId: enrollments.courseId })
-    .from(enrollments)
-    .where(and(...enrollmentConditions))
-    .groupBy(enrollments.userId, enrollments.courseId)
-    .all();
-  if (eligibleEnrollments.length === 0) {
-    return { state: "empty", reason: "no_records" };
-  }
-
-  const lessonCounts = tx
-    .select({
-      courseId: modules.courseId,
-      count: sql<number>`count(${lessons.id})`,
-    })
-    .from(lessons)
-    .innerJoin(modules, eq(lessons.moduleId, modules.id))
-    .where(inArray(modules.courseId, options.courseIds))
-    .groupBy(modules.courseId)
-    .all();
-  const lessonCountByCourse = new Map(
-    lessonCounts.map((row) => [row.courseId, row.count])
+  courseIds: number[]
+) {
+  return new Map(
+    tx
+      .select({
+        courseId: modules.courseId,
+        count: sql<number>`count(${lessons.id})`,
+      })
+      .from(lessons)
+      .innerJoin(modules, eq(lessons.moduleId, modules.id))
+      .where(inArray(modules.courseId, courseIds))
+      .groupBy(modules.courseId)
+      .all()
+      .map((row) => [row.courseId, row.count])
   );
-  const possibleLessonCount = eligibleEnrollments.reduce(
-    (total, enrollment) =>
-      total + (lessonCountByCourse.get(enrollment.courseId) ?? 0),
-    0
-  );
-  if (possibleLessonCount === 0) {
-    return { state: "unavailable", reason: "no_lessons" };
-  }
+}
 
-  const completionConditions = [
+// The roster scope already selected eligible students; aggregate scopes select
+// Enrollment relationships in their date range without filtering completion dates.
+function readProgressCompletions(
+  tx: AnalyticsTransaction,
+  options: ProgressScope | { courseIds: number[]; studentIds: number[] }
+) {
+  const conditions = [
     inArray(modules.courseId, options.courseIds),
     eq(lessonProgress.status, LessonProgressStatus.Completed),
   ];
-  if (options.start)
-    completionConditions.push(gte(enrollments.enrolledAt, options.start));
-  if (options.end)
-    completionConditions.push(lt(enrollments.enrolledAt, options.end));
-  const completedLessonCount = tx
+  const query = tx
     .select({
       userId: lessonProgress.userId,
       courseId: modules.courseId,
-      lessonId: lessonProgress.lessonId,
+      count: sql<number>`count(distinct ${lessonProgress.lessonId})`,
     })
     .from(lessonProgress)
     .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
-    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id));
+  if ("studentIds" in options) {
+    conditions.push(inArray(lessonProgress.userId, options.studentIds));
+    return query
+      .where(and(...conditions))
+      .groupBy(lessonProgress.userId, modules.courseId)
+      .all();
+  }
+  if (options.start)
+    conditions.push(gte(enrollments.enrolledAt, options.start));
+  if (options.end) conditions.push(lt(enrollments.enrolledAt, options.end));
+  return query
     .innerJoin(
       enrollments,
       and(
@@ -376,14 +374,127 @@ function readStudentProgress(
         eq(enrollments.courseId, modules.courseId)
       )
     )
-    .where(and(...completionConditions))
-    .groupBy(lessonProgress.userId, modules.courseId, lessonProgress.lessonId)
-    .all().length;
+    .where(and(...conditions))
+    .groupBy(lessonProgress.userId, modules.courseId)
+    .all();
+}
 
+function progressMetric(options: {
+  hasEnrollments: boolean;
+  possible: number;
+  completed: number;
+}): AnalyticsMetric<number> {
+  if (!options.hasEnrollments) return { state: "empty", reason: "no_records" };
+  if (options.possible === 0)
+    return { state: "unavailable", reason: "no_lessons" };
   return {
     state: "value",
-    value: (completedLessonCount / possibleLessonCount) * 100,
+    value: (options.completed / options.possible) * 100,
   };
+}
+
+function possibleProgressLessons(options: {
+  eligibleEnrollments: EligibleEnrollment[];
+  lessonCounts: Map<number, number>;
+}) {
+  const counts = new Map<number, number>();
+  for (const enrollment of options.eligibleEnrollments) {
+    counts.set(
+      enrollment.courseId,
+      (counts.get(enrollment.courseId) ?? 0) +
+        (options.lessonCounts.get(enrollment.courseId) ?? 0)
+    );
+  }
+  return counts;
+}
+
+function readOverviewProgress(
+  tx: AnalyticsTransaction,
+  options: ProgressScope
+): AnalyticsMetric<number> {
+  const eligibleEnrollments = readEligibleEnrollments(tx, options);
+  if (eligibleEnrollments.length === 0)
+    return { state: "empty", reason: "no_records" };
+  const possibleCounts = possibleProgressLessons({
+    eligibleEnrollments,
+    lessonCounts: readProgressLessonCounts(tx, options.courseIds),
+  });
+  const possible = [...possibleCounts.values()].reduce(
+    (sum, count) => sum + count,
+    0
+  );
+  // Overview has always resolved missing denominators before reading completions.
+  if (possible === 0) return { state: "unavailable", reason: "no_lessons" };
+  const completed = readProgressCompletions(tx, options).reduce(
+    (sum, row) => sum + row.count,
+    0
+  );
+  return progressMetric({
+    hasEnrollments: true,
+    possible,
+    completed,
+  });
+}
+
+function readCourseProgress(
+  tx: AnalyticsTransaction,
+  options: ProgressScope & {
+    eligibleEnrollments: EligibleEnrollment[];
+  }
+) {
+  const lessonCounts = readProgressLessonCounts(tx, options.courseIds);
+  // Course and Student preserve read failures even for a missing denominator.
+  const completions = readProgressCompletions(tx, options);
+  const completedCounts = new Map<number, number>();
+  for (const row of completions) {
+    completedCounts.set(
+      row.courseId,
+      (completedCounts.get(row.courseId) ?? 0) + row.count
+    );
+  }
+  const possibleCounts = possibleProgressLessons({
+    eligibleEnrollments: options.eligibleEnrollments,
+    lessonCounts,
+  });
+  return new Map(
+    options.courseIds.map((id) => [
+      id,
+      progressMetric({
+        hasEnrollments: possibleCounts.has(id),
+        possible: possibleCounts.get(id) ?? 0,
+        completed: completedCounts.get(id) ?? 0,
+      }),
+    ])
+  );
+}
+
+function readStudentProgress(
+  tx: AnalyticsTransaction,
+  options: {
+    courseId: number;
+    studentIds: number[];
+  }
+) {
+  const courseIds = [options.courseId];
+  const lessonCount =
+    readProgressLessonCounts(tx, courseIds).get(options.courseId) ?? 0;
+  const completions = readProgressCompletions(tx, {
+    courseIds,
+    studentIds: options.studentIds,
+  });
+  const completedCounts = new Map(
+    completions.map((row) => [row.userId, row.count])
+  );
+  return new Map(
+    options.studentIds.map((id) => [
+      id,
+      progressMetric({
+        hasEnrollments: true,
+        possible: lessonCount,
+        completed: completedCounts.get(id) ?? 0,
+      }),
+    ])
+  );
 }
 
 type QuizAnalytics = {
@@ -645,7 +756,7 @@ export function getAnalyticsMetric(options: {
           ok: true,
           asOf,
           metric: options.metric,
-          result: readStudentProgress(tx, {
+          result: readOverviewProgress(tx, {
             courseIds,
             start: options.start,
             end: options.end,
@@ -747,7 +858,7 @@ function readAnalyticsOverview(
 
   let studentProgressMetric: AnalyticsMetric<number>;
   try {
-    studentProgressMetric = readStudentProgress(tx, {
+    studentProgressMetric = readOverviewProgress(tx, {
       courseIds: authorizedCourseIds,
       start: options.start,
       end: options.end,
@@ -808,11 +919,6 @@ function readCourseSummaries(
     purchaseConditions.push(gte(purchases.createdAt, options.start));
   if (options.end)
     purchaseConditions.push(lt(purchases.createdAt, options.end));
-  const enrollmentConditions = [inArray(enrollments.courseId, courseIds)];
-  if (options.start)
-    enrollmentConditions.push(gte(enrollments.enrolledAt, options.start));
-  if (options.end)
-    enrollmentConditions.push(lt(enrollments.enrolledAt, options.end));
   const failed: AnalyticsMetric<number> = {
     state: "error",
     reason: "read_failed",
@@ -843,12 +949,11 @@ function readCourseSummaries(
   let enrollmentCounts: Map<number, number> | null = null;
   let eligibleEnrollments: { courseId: number; userId: number }[] | null = null;
   try {
-    eligibleEnrollments = tx
-      .select({ courseId: enrollments.courseId, userId: enrollments.userId })
-      .from(enrollments)
-      .where(and(...enrollmentConditions))
-      .groupBy(enrollments.courseId, enrollments.userId)
-      .all();
+    eligibleEnrollments = readEligibleEnrollments(tx, {
+      courseIds,
+      start: options.start,
+      end: options.end,
+    });
     enrollmentCounts = new Map();
     for (const row of eligibleEnrollments) {
       enrollmentCounts.set(
@@ -863,82 +968,12 @@ function readCourseSummaries(
   let progressByCourse: Map<number, AnalyticsMetric<number>> | null = null;
   if (eligibleEnrollments !== null) {
     try {
-      const lessonCounts = new Map(
-        tx
-          .select({
-            courseId: modules.courseId,
-            count: sql<number>`count(${lessons.id})`,
-          })
-          .from(lessons)
-          .innerJoin(modules, eq(lessons.moduleId, modules.id))
-          .where(inArray(modules.courseId, courseIds))
-          .groupBy(modules.courseId)
-          .all()
-          .map((row) => [row.courseId, row.count])
-      );
-      const completionConditions = [
-        inArray(modules.courseId, courseIds),
-        eq(lessonProgress.status, LessonProgressStatus.Completed),
-      ];
-      if (options.start)
-        completionConditions.push(gte(enrollments.enrolledAt, options.start));
-      if (options.end)
-        completionConditions.push(lt(enrollments.enrolledAt, options.end));
-      const completions = tx
-        .select({
-          courseId: modules.courseId,
-          userId: lessonProgress.userId,
-          lessonId: lessonProgress.lessonId,
-        })
-        .from(lessonProgress)
-        .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
-        .innerJoin(modules, eq(lessons.moduleId, modules.id))
-        .innerJoin(
-          enrollments,
-          and(
-            eq(enrollments.userId, lessonProgress.userId),
-            eq(enrollments.courseId, modules.courseId)
-          )
-        )
-        .where(and(...completionConditions))
-        .groupBy(
-          modules.courseId,
-          lessonProgress.userId,
-          lessonProgress.lessonId
-        )
-        .all();
-      const completedCounts = new Map<number, number>();
-      for (const row of completions) {
-        completedCounts.set(
-          row.courseId,
-          (completedCounts.get(row.courseId) ?? 0) + 1
-        );
-      }
-      const possibleCounts = new Map<number, number>();
-      for (const row of eligibleEnrollments) {
-        possibleCounts.set(
-          row.courseId,
-          (possibleCounts.get(row.courseId) ?? 0) +
-            (lessonCounts.get(row.courseId) ?? 0)
-        );
-      }
-      progressByCourse = new Map();
-      for (const course of pageCourses) {
-        const enrolled = enrollmentCounts?.get(course.id) ?? 0;
-        const possible = possibleCounts.get(course.id) ?? 0;
-        progressByCourse.set(
-          course.id,
-          enrolled === 0
-            ? empty
-            : possible === 0
-              ? { state: "unavailable", reason: "no_lessons" }
-              : {
-                  state: "value",
-                  value:
-                    ((completedCounts.get(course.id) ?? 0) / possible) * 100,
-                }
-        );
-      }
+      progressByCourse = readCourseProgress(tx, {
+        courseIds,
+        eligibleEnrollments,
+        start: options.start,
+        end: options.end,
+      });
     } catch {
       // A failed progress read does not hide purchases or enrollment counts.
     }
@@ -996,7 +1031,7 @@ function readStudentSnapshots(
     .offset((page - 1) * 20)
     .all();
   const studentIds = students.map((student) => student.id);
-  const progress = new Map<number, AnalyticsMetric<number>>();
+  let progress = new Map<number, AnalyticsMetric<number>>();
   const quizAverages = new Map<number, AnalyticsMetric<number>>();
   const failed: AnalyticsMetric<number> = {
     state: "error",
@@ -1004,44 +1039,7 @@ function readStudentSnapshots(
   };
   if (studentIds.length > 0 && options.metric !== "quizAverage") {
     try {
-      const lessonCount =
-        tx
-          .select({ count: sql<number>`count(${lessons.id})` })
-          .from(lessons)
-          .innerJoin(modules, eq(lessons.moduleId, modules.id))
-          .where(eq(modules.courseId, course.id))
-          .get()?.count ?? 0;
-      const completed = new Map(
-        tx
-          .select({
-            userId: lessonProgress.userId,
-            count: sql<number>`count(distinct ${lessonProgress.lessonId})`,
-          })
-          .from(lessonProgress)
-          .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
-          .innerJoin(modules, eq(lessons.moduleId, modules.id))
-          .where(
-            and(
-              eq(modules.courseId, course.id),
-              inArray(lessonProgress.userId, studentIds),
-              eq(lessonProgress.status, LessonProgressStatus.Completed)
-            )
-          )
-          .groupBy(lessonProgress.userId)
-          .all()
-          .map((row) => [row.userId, row.count])
-      );
-      for (const id of studentIds) {
-        progress.set(
-          id,
-          lessonCount === 0
-            ? { state: "unavailable", reason: "no_lessons" }
-            : {
-                state: "value",
-                value: ((completed.get(id) ?? 0) / lessonCount) * 100,
-              }
-        );
-      }
+      progress = readStudentProgress(tx, { courseId: course.id, studentIds });
     } catch {
       // A failed progress read must not hide identities or quiz scores.
     }
