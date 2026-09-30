@@ -12,22 +12,21 @@ import {
   isAnalyticsPageError,
 } from "~/lib/analytics-page-data";
 import type { AnalyticsPageData } from "~/lib/analytics-page-data";
+import {
+  type RetryContext,
+  type RetryEvent,
+  type PageMetricTarget,
+} from "~/lib/use-analytics-retry";
 import type { AnalyticsMetricName as MetricName } from "~/services/analyticsService";
 
 function CourseSummaries({
   data,
   disabled,
-  stale,
-  scopeGeneration,
-  onNotice,
-  onScopeFailure,
+  context,
 }: {
   data: AnalyticsPageData;
   disabled: boolean;
-  stale: boolean;
-  scopeGeneration: string;
-  onNotice: (message: string) => void;
-  onScopeFailure: (message: string) => void;
+  context: RetryContext;
 }) {
   const summaries = data.courseSummaries;
   const location = useLocation();
@@ -76,22 +75,17 @@ function CourseSummaries({
                   ["studentProgress", "Average Student Learning Progress"],
                 ] as const
               ).map(([name, title]) => {
-                const retryParams = new URLSearchParams(scopeParams);
-                retryParams.set("courseId", String(row.id));
                 return (
                   <RetryMetricCard
                     key={name}
-                    title={title}
-                    name={name}
-                    metric={row[name]}
-                    asOf={data.asOf}
-                    scopeKey={retryParams.toString()}
-                    scopeGeneration={scopeGeneration}
-                    stale={stale}
-                    onNotice={onNotice}
-                    onScopeFailure={onScopeFailure}
-                    courseScoped={true}
-                    summaryCourse={row}
+                    target={{
+                      kind: "summary",
+                      course: row,
+                      metric: name,
+                      label: title,
+                    }}
+                    initial={{ metric: row[name], asOf: data.asOf }}
+                    context={context}
                   />
                 );
               })}
@@ -202,9 +196,6 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
   const retryPending = fetchers.some((fetcher) => fetcher.state !== "idle");
   const stale = navigation.state !== "idle";
   const course = data?.course ?? errorData?.course;
-  const retryScope = new URLSearchParams(location.search);
-  if (course) retryScope.set("courseId", String(course.id));
-  const scopeKey = retryScope.toString();
   const snapshotGeneration = `${location.pathname}:${location.key}:${data?.asOf ?? "error"}`;
   const dateParams = new URLSearchParams();
   for (const name of ["range", "start", "end"]) {
@@ -216,13 +207,27 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
   const [scopeFailure, setScopeFailure] = useState<{
     snapshot: string;
     message: string;
+    reason: Extract<RetryEvent, { kind: "recovery" }>["reason"];
   } | null>(null);
-  const reportNotice = useCallback((message: string) => setNotice(message), []);
-  const reportScopeFailure = useCallback(
-    (message: string) =>
-      setScopeFailure({ snapshot: snapshotGeneration, message }),
+  const report = useCallback(
+    (event: RetryEvent) => {
+      if (event.generation !== snapshotGeneration) return;
+      if (event.kind === "recovery")
+        setScopeFailure({
+          snapshot: event.generation,
+          message: event.message,
+          reason: event.reason,
+        });
+      else setNotice(event.message);
+    },
     [snapshotGeneration]
   );
+  const retryContext: RetryContext = {
+    generation: snapshotGeneration,
+    navigationPending: stale,
+    retryPending,
+    report,
+  };
   useEffect(() => {
     setNotice(
       data?.studentSnapshots?.rows.some(
@@ -282,7 +287,13 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
   if (scopeFailure?.snapshot === snapshotGeneration) {
     return (
       <div role="alert" className="rounded-xl border border-destructive p-6">
-        <h1 className="text-xl font-semibold">Analytics access changed</h1>
+        <h1 className="text-xl font-semibold">
+          {scopeFailure.reason === "forbidden"
+            ? "Analytics access changed"
+            : scopeFailure.reason === "not_found"
+              ? "Course no longer available"
+              : "Student membership changed"}
+        </h1>
         <p className="mt-2">{scopeFailure.message}</p>
         <a
           className="mt-4 inline-block underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
@@ -294,21 +305,45 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
     );
   }
 
-  const renderMetric = (name: MetricName, title: string) =>
-    data[name] ? (
+  const renderMetric = ({
+    name,
+    title,
+  }: {
+    name: MetricName;
+    title: string;
+  }) => {
+    let target: PageMetricTarget;
+    if (course) {
+      if (name === "retentionRate" || name === "netRevenue") return null;
+      target = {
+        kind: "page",
+        scope: { kind: "course", courseId: course.id },
+        metric: name,
+        label: title,
+      };
+    } else {
+      if (
+        name === "averageBestAttemptQuizScore" ||
+        name === "participatingStudents" ||
+        name === "quizCount"
+      )
+        return null;
+      target = {
+        kind: "page",
+        scope: { kind: "overview" },
+        metric: name,
+        label: title,
+      };
+    }
+    const metric = data[name];
+    return metric ? (
       <RetryMetricCard
-        title={title}
-        name={name}
-        metric={data[name]}
-        asOf={data.asOf}
-        scopeKey={scopeKey}
-        stale={stale}
-        scopeGeneration={snapshotGeneration}
-        onNotice={reportNotice}
-        onScopeFailure={reportScopeFailure}
-        courseScoped={Boolean(course)}
+        target={target}
+        initial={{ metric, asOf: data.asOf }}
+        context={retryContext}
       />
     ) : null;
+  };
 
   return (
     <div className="space-y-6">
@@ -368,16 +403,16 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           !course && "xl:grid-cols-5"
         )}
       >
-        {renderMetric("purchaseTotal", "Purchase Total")}
-        {renderMetric("enrollmentCount", "Enrollment Count")}
+        {renderMetric({ name: "purchaseTotal", title: "Purchase Total" })}
+        {renderMetric({ name: "enrollmentCount", title: "Enrollment Count" })}
         {!course && (
           <>
-            {renderMetric(
-              "studentProgress",
-              "Average Student Learning Progress"
-            )}
-            {renderMetric("retentionRate", "Retention Rate")}
-            {renderMetric("netRevenue", "Net Revenue")}
+            {renderMetric({
+              name: "studentProgress",
+              title: "Average Student Learning Progress",
+            })}
+            {renderMetric({ name: "retentionRate", title: "Retention Rate" })}
+            {renderMetric({ name: "netRevenue", title: "Net Revenue" })}
           </>
         )}
       </div>
@@ -385,10 +420,7 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
         <CourseSummaries
           data={data}
           disabled={stale || retryPending}
-          stale={stale}
-          scopeGeneration={snapshotGeneration}
-          onNotice={reportNotice}
-          onScopeFailure={reportScopeFailure}
+          context={retryContext}
         />
       )}
       {course && (
@@ -396,17 +428,20 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           <h2 id="learning-outcomes-title" className="text-xl font-semibold">
             Course learning outcomes
           </h2>
-          {renderMetric(
-            "studentProgress",
-            "Course Average Student Learning Progress"
-          )}
+          {renderMetric({
+            name: "studentProgress",
+            title: "Course Average Student Learning Progress",
+          })}
           <div className="grid min-w-0 gap-4 sm:grid-cols-3">
-            {renderMetric(
-              "averageBestAttemptQuizScore",
-              "Average Best-Attempt Quiz Score"
-            )}
-            {renderMetric("participatingStudents", "Participating Students")}
-            {renderMetric("quizCount", "Quizzes in Course")}
+            {renderMetric({
+              name: "averageBestAttemptQuizScore",
+              title: "Average Best-Attempt Quiz Score",
+            })}
+            {renderMetric({
+              name: "participatingStudents",
+              title: "Participating Students",
+            })}
+            {renderMetric({ name: "quizCount", title: "Quizzes in Course" })}
           </div>
           {data.studentProgress.state === "empty" && (
             <p className="text-sm text-muted-foreground">
@@ -423,9 +458,7 @@ export function AnalyticsPage({ loaderData }: { loaderData: unknown }) {
           asOf={data.asOf}
           disabled={stale || retryPending}
           updating={stale}
-          scopeGeneration={snapshotGeneration}
-          onNotice={reportNotice}
-          onScopeFailure={reportScopeFailure}
+          context={retryContext}
         />
       )}
     </div>
