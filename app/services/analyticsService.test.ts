@@ -126,6 +126,108 @@ function attempt(options: {
     .run();
 }
 
+describe("Student progress failure precedence", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it.each(["no enrollment", "no lessons", "no completions"])(
+    "preserves initial, failed and recovered results with %s",
+    (scenario) => {
+      if (scenario !== "no enrollment") {
+        testDb
+          .insert(schema.enrollments)
+          .values({
+            userId: base.user.id,
+            courseId: base.course.id,
+          })
+          .run();
+      }
+      if (scenario === "no completions") {
+        createLessons({ courseId: base.course.id, count: 1 });
+      }
+      purchase({
+        courseId: base.course.id,
+        pricePaid: 1200,
+        createdAt: "2025-03-01T00:00:00.000Z",
+      });
+      const options = { userId: base.instructor.id, courseId: base.course.id };
+      const normal =
+        scenario === "no enrollment"
+          ? { state: "empty", reason: "no_records" }
+          : scenario === "no lessons"
+            ? { state: "unavailable", reason: "no_lessons" }
+            : { state: "value", value: 0 };
+      const failed = { state: "error", reason: "read_failed" };
+      const check = (broken: boolean) => {
+        const aggregate =
+          broken && scenario === "no completions" ? failed : normal;
+        const rows =
+          scenario === "no enrollment"
+            ? []
+            : [
+                {
+                  id: base.user.id,
+                  email: base.user.email,
+                  studentProgress: broken ? failed : normal,
+                  quizAverage: { state: "unavailable", reason: "no_quizzes" },
+                },
+              ];
+        expect(getAnalyticsOverview(options)).toMatchObject({
+          ok: true,
+          studentProgress: aggregate,
+          purchaseTotal: { state: "value", value: 1200 },
+          enrollmentCount:
+            scenario === "no enrollment"
+              ? { state: "empty", reason: "no_records" }
+              : { state: "value", value: 1 },
+          courseSummaries: {
+            rows: [
+              { id: base.course.id, studentProgress: broken ? failed : normal },
+            ],
+          },
+          studentSnapshots: { rows },
+        });
+        expect(getCourseAnalytics(options)).toMatchObject({
+          ok: true,
+          studentProgress: aggregate,
+          studentSnapshots: { rows },
+        });
+        expect(
+          getAnalyticsMetric({ ...options, metric: "studentProgress" })
+        ).toMatchObject({ ok: true, result: aggregate });
+        expect(
+          getStudentSnapshotMetric({ ...options, metric: "studentProgress" })
+        ).toMatchObject({
+          ok: true,
+          rows:
+            scenario === "no enrollment"
+              ? []
+              : [
+                  {
+                    id: base.user.id,
+                    result: broken ? failed : normal,
+                  },
+                ],
+        });
+      };
+      check(false);
+      testDb.$client.exec(
+        "ALTER TABLE lesson_progress RENAME TO unavailable_lesson_progress"
+      );
+      try {
+        check(true);
+      } finally {
+        testDb.$client.exec(
+          "ALTER TABLE unavailable_lesson_progress RENAME TO lesson_progress"
+        );
+      }
+      check(false);
+    }
+  );
+});
+
 describe("analyticsService Purchase Total", () => {
   beforeEach(() => {
     testDb = createTestDb();
@@ -1934,5 +2036,378 @@ describe("student snapshot retry scope", () => {
       ok: false,
       error: "not_found",
     });
+  });
+});
+
+function seedSharedProgress() {
+  const small = base.course;
+  const large = createCourse(base.instructor.id, "Four lesson Course");
+  const smallLessons = createLessons({ courseId: small.id, count: 2 });
+  const largeLessons = createLessons({ courseId: large.id, count: 4 });
+  const second = createStudent("Second Student");
+  const period = {
+    start: "2025-03-01T00:00:00.000Z",
+    end: "2025-04-01T00:00:00.000Z",
+  };
+  testDb
+    .insert(schema.enrollments)
+    .values([
+      { userId: base.user.id, courseId: small.id, enrolledAt: period.start },
+      {
+        userId: base.user.id,
+        courseId: small.id,
+        enrolledAt: "2025-03-02T00:00:00.000Z",
+      },
+      {
+        userId: base.user.id,
+        courseId: small.id,
+        enrolledAt: "2025-02-01T00:00:00.000Z",
+      },
+      { userId: second.id, courseId: small.id, enrolledAt: period.start },
+      { userId: base.user.id, courseId: large.id, enrolledAt: period.start },
+      // Existing Enrollment population also includes users with another platform role.
+      {
+        userId: base.instructor.id,
+        courseId: large.id,
+        enrolledAt: period.start,
+      },
+      { userId: second.id, courseId: large.id, enrolledAt: period.end },
+    ])
+    .run();
+  testDb
+    .insert(schema.lessonProgress)
+    .values([
+      {
+        userId: base.user.id,
+        lessonId: smallLessons[0].id,
+        status: schema.LessonProgressStatus.Completed,
+        completedAt: "2025-05-01T00:00:00.000Z",
+      },
+      {
+        userId: base.user.id,
+        lessonId: smallLessons[0].id,
+        status: schema.LessonProgressStatus.Completed,
+      },
+      {
+        userId: base.user.id,
+        lessonId: smallLessons[1].id,
+        status: schema.LessonProgressStatus.InProgress,
+      },
+      {
+        userId: base.user.id,
+        lessonId: largeLessons[0].id,
+        status: schema.LessonProgressStatus.Completed,
+      },
+      ...largeLessons.slice(0, 2).map((lesson) => ({
+        userId: base.instructor.id,
+        lessonId: lesson.id,
+        status: schema.LessonProgressStatus.Completed,
+      })),
+      ...largeLessons.map((lesson) => ({
+        userId: second.id,
+        lessonId: lesson.id,
+        status: schema.LessonProgressStatus.Completed,
+      })),
+    ])
+    .run();
+  return { small, large, second, period };
+}
+
+describe("shared Student progress facts through public operations", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("weights distinct Enrollment relationships and lesson completions without rounding across initial reads and retries", () => {
+    const { small, large, second, period } = seedSharedProgress();
+    const options = { userId: base.instructor.id, ...period };
+    const overview = getAnalyticsOverview(options);
+    // Four completions out of twelve possible student-lesson units.
+    expect(overview).toMatchObject({
+      ok: true,
+      enrollmentCount: { state: "value", value: 4 },
+      studentProgress: { state: "value", value: 33.33333333333333 },
+    });
+    expect(
+      getAnalyticsMetric({ ...options, metric: "studentProgress" })
+    ).toMatchObject({
+      ok: true,
+      result: { state: "value", value: 33.33333333333333 },
+    });
+    if (!overview.ok) throw new Error("Expected authorized Overview");
+    for (const expected of [
+      {
+        courseId: small.id,
+        aggregate: 25,
+        students: [
+          { id: second.id, value: 0 },
+          { id: base.user.id, value: 50 },
+        ],
+      },
+      {
+        courseId: large.id,
+        aggregate: 37.5,
+        students: [
+          { id: base.instructor.id, value: 50 },
+          { id: base.user.id, value: 25 },
+        ],
+      },
+    ]) {
+      expect(
+        overview.courseSummaries.rows.find(
+          (row) => row.id === expected.courseId
+        )
+      ).toMatchObject({
+        enrollmentCount: { state: "value", value: 2 },
+        studentProgress: { state: "value", value: expected.aggregate },
+      });
+      const courseOptions = { ...options, courseId: expected.courseId };
+      const course = getCourseAnalytics(courseOptions);
+      expect(course).toMatchObject({
+        ok: true,
+        studentProgress: { state: "value", value: expected.aggregate },
+      });
+      expect(
+        getAnalyticsMetric({ ...courseOptions, metric: "studentProgress" })
+      ).toMatchObject({
+        ok: true,
+        result: { state: "value", value: expected.aggregate },
+      });
+      const retry = getStudentSnapshotMetric({
+        ...courseOptions,
+        metric: "studentProgress",
+      });
+      expect(retry).toMatchObject({
+        ok: true,
+        rows: expected.students.map((student) => ({
+          id: student.id,
+          result: { state: "value", value: student.value },
+        })),
+      });
+      if (!course.ok || !retry.ok)
+        throw new Error("Expected authorized Course and roster");
+      expect(
+        course.studentSnapshots.rows.map((row) => ({
+          id: row.id,
+          result: row.studentProgress,
+        }))
+      ).toEqual(
+        expected.students.map((student) => ({
+          id: student.id,
+          result: { state: "value", value: student.value },
+        }))
+      );
+      expect(retry.rows).toHaveLength(2);
+      for (const row of retry.rows)
+        expect(Object.keys(row).sort()).toEqual(["id", "result"]);
+    }
+  });
+
+  it("keeps mixed Course states and the existing batch failure boundary while preserving sibling metrics", () => {
+    const [lesson] = createLessons({ courseId: base.course.id, count: 1 });
+    const noLessons = createCourse(base.instructor.id, "No lessons");
+    const noEnrollment = createCourse(base.instructor.id, "No Enrollment");
+    testDb
+      .insert(schema.enrollments)
+      .values([
+        { userId: base.user.id, courseId: base.course.id },
+        { userId: base.user.id, courseId: noLessons.id },
+      ])
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values({
+        userId: base.user.id,
+        lessonId: lesson.id,
+        status: schema.LessonProgressStatus.Completed,
+      })
+      .run();
+    const quiz = createQuiz(lesson.id, "Unaffected quiz");
+    attempt({ userId: base.user.id, quizId: quiz.id, score: 0.8 });
+    purchase({
+      courseId: base.course.id,
+      pricePaid: 1200,
+      createdAt: "2025-03-01T00:00:00.000Z",
+    });
+    const options = { userId: base.instructor.id };
+    const checkNormal = () => {
+      const result = getAnalyticsOverview(options);
+      expect(result).toMatchObject({
+        studentProgress: { state: "value", value: 100 },
+      });
+      if (!result.ok) throw new Error("Expected authorized Overview");
+      expect(
+        result.courseSummaries.rows.find((row) => row.id === noLessons.id)
+      ).toMatchObject({
+        studentProgress: { state: "unavailable", reason: "no_lessons" },
+      });
+      expect(
+        result.courseSummaries.rows.find((row) => row.id === noEnrollment.id)
+      ).toMatchObject({
+        studentProgress: { state: "empty", reason: "no_records" },
+      });
+    };
+    checkNormal();
+    testDb.$client.exec(
+      "ALTER TABLE lesson_progress RENAME TO unavailable_lesson_progress"
+    );
+    try {
+      const result = getAnalyticsOverview(options);
+      expect(result).toMatchObject({
+        studentProgress: { state: "error", reason: "read_failed" },
+        purchaseTotal: { state: "value", value: 1200 },
+        enrollmentCount: { state: "value", value: 2 },
+      });
+      if (!result.ok) throw new Error("Expected authorized Overview");
+      expect(result.courseSummaries.rows).toHaveLength(3);
+      for (const row of result.courseSummaries.rows) {
+        expect(row.studentProgress).toEqual({
+          state: "error",
+          reason: "read_failed",
+        });
+        expect(row.enrollmentCount).toEqual(
+          row.id === noEnrollment.id
+            ? { state: "empty", reason: "no_records" }
+            : { state: "value", value: 1 }
+        );
+      }
+      expect(
+        getCourseAnalytics({ ...options, courseId: base.course.id })
+      ).toMatchObject({
+        studentSnapshots: {
+          rows: [
+            {
+              id: base.user.id,
+              email: base.user.email,
+              studentProgress: { state: "error", reason: "read_failed" },
+              quizAverage: { state: "value", value: 0.8 },
+            },
+          ],
+        },
+      });
+    } finally {
+      testDb.$client.exec(
+        "ALTER TABLE unavailable_lesson_progress RENAME TO lesson_progress"
+      );
+    }
+    checkNormal();
+  });
+});
+
+describe("Student progress pagination scope", () => {
+  beforeEach(() => {
+    testDb = createTestDb();
+    base = seedBaseData(testDb);
+  });
+
+  it("calculates only the selected roster page while preserving whole Course progress", () => {
+    const [lesson] = createLessons({ courseId: base.course.id, count: 3 });
+    const students = Array.from({ length: 21 }, (_, index) =>
+      createStudent(`Student ${String(index).padStart(2, "0")}`)
+    );
+    testDb
+      .insert(schema.enrollments)
+      .values(
+        students.map((student) => ({
+          userId: student.id,
+          courseId: base.course.id,
+          enrolledAt: "2025-03-01T00:00:00.000Z",
+        }))
+      )
+      .run();
+    testDb
+      .insert(schema.lessonProgress)
+      .values(
+        students.slice(0, 20).map((student) => ({
+          userId: student.id,
+          lessonId: lesson.id,
+          status: schema.LessonProgressStatus.Completed,
+        }))
+      )
+      .run();
+    const options = { userId: base.instructor.id, courseId: base.course.id };
+    for (const studentPage of [1, 2]) {
+      const result = getCourseAnalytics({ ...options, studentPage });
+      expect(result).toMatchObject({
+        ok: true,
+        studentProgress: { state: "value", value: (20 / 63) * 100 },
+      });
+      if (!result.ok) throw new Error("Expected authorized Course");
+      const expectedStudents =
+        studentPage === 1 ? students.slice(0, 20) : students.slice(20);
+      const expected = expectedStudents.map((student) => ({
+        id: student.id,
+        result: {
+          state: "value",
+          value: studentPage === 1 ? 33.33333333333333 : 0,
+        },
+      }));
+      expect(
+        result.studentSnapshots.rows.map((row) => ({
+          id: row.id,
+          result: row.studentProgress,
+        }))
+      ).toEqual(expected);
+      const retry = getStudentSnapshotMetric({
+        ...options,
+        studentPage,
+        metric: "studentProgress",
+      });
+      if (!retry.ok) throw new Error("Expected authorized roster retry");
+      expect(retry.rows).toEqual(expected);
+    }
+  });
+
+  it("keeps Overview progress independent of Course pages with different lesson counts and progress", () => {
+    for (let index = 0; index < 21; index++) {
+      const course = createCourse(
+        base.instructor.id,
+        `Course ${String(index).padStart(2, "0")}`
+      );
+      const [lesson] = createLessons({
+        courseId: course.id,
+        count: index === 20 ? 4 : 1,
+      });
+      testDb
+        .insert(schema.enrollments)
+        .values({ userId: base.user.id, courseId: course.id })
+        .run();
+      if (index < 20)
+        testDb
+          .insert(schema.lessonProgress)
+          .values({
+            userId: base.user.id,
+            lessonId: lesson.id,
+            status: schema.LessonProgressStatus.Completed,
+          })
+          .run();
+    }
+    const first = getAnalyticsOverview({
+      userId: base.instructor.id,
+      coursePage: 1,
+    });
+    const second = getAnalyticsOverview({
+      userId: base.instructor.id,
+      coursePage: 2,
+    });
+    for (const result of [first, second]) {
+      expect(result).toMatchObject({
+        ok: true,
+        studentProgress: { state: "value", value: (20 / 24) * 100 },
+      });
+    }
+    if (!first.ok || !second.ok)
+      throw new Error("Expected authorized Overview");
+    expect(first.courseSummaries.rows).toHaveLength(20);
+    for (const row of first.courseSummaries.rows) {
+      expect(row.studentProgress).toEqual({ state: "value", value: 100 });
+    }
+    expect(
+      second.courseSummaries.rows.map((row) => row.studentProgress)
+    ).toEqual([
+      { state: "value", value: 0 },
+      { state: "empty", reason: "no_records" },
+    ]);
   });
 });
