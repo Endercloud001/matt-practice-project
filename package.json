@@ -52,6 +52,7 @@
     "@types/youtube": "^0.1.2",
     "ai-hero-cli": "^0.4.1",
     "drizzle-kit": "^0.31.4",
+    "jsdom": "^27.4.0",
     "prettier": "^3.8.1",
     "shadcn": "^3.8.4",
     "tailwindcss": "^4.1.13",
