@@ -8,6 +8,7 @@ export function AnalyticsMetricCard({
   title,
   name,
   metric,
+  asOf,
   updating = false,
   stale = false,
   retryDisabled = false,
@@ -113,6 +114,17 @@ export function AnalyticsMetricCard({
           </p>
         )}
         {explanation && <p>{explanation}</p>}
+        <p>
+          As of{" "}
+          <time dateTime={asOf}>
+            {new Date(asOf).toLocaleString("en-US", {
+              timeZone: "UTC",
+              dateStyle: "medium",
+              timeStyle: "short",
+            })}
+          </time>{" "}
+          UTC
+        </p>
         {updating ? (
           <p>Updating this metric</p>
         ) : stale ? (
