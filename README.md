@@ -50,6 +50,31 @@ The app will be running at `http://localhost:5173`.
 | `pnpm reset <commit>`       | Reset your repo to a lesson checkpoint |
 | `pnpm cherry-pick <commit>` | Cherry-pick a lesson's solution        |
 
+## AI Coding Feedback Loops
+
+Following [Essential AI Coding Feedback Loops for TypeScript Projects](https://www.aihero.dev/essential-ai-coding-feedback-loops-for-type-script-projects),
+`pnpm install` installs the Git hooks through the `prepare` script. Each
+`git commit` then runs these checks in order:
+
+1. **Format staged files:** lint-staged runs Prettier using the existing
+   `.prettierrc` and restages formatting changes. Unsupported file types are skipped.
+2. **Check types:** `pnpm run typecheck` generates React Router types and runs
+   TypeScript across the project.
+3. **Run tests:** `pnpm test` runs the complete Vitest suite once, without watch mode.
+
+Any failed step stops the commit. Read the error output, fix the problem, stage
+the changes, and retry the commit. AI agents should use the same loop and fix
+failures before reporting completion; do not bypass the hooks to make a commit pass.
+
+During development, run `pnpm run typecheck` and `pnpm test` for immediate feedback,
+or use `pnpm test:watch` while iterating on tests. To check the current staged files
+manually, run `pnpm exec lint-staged`.
+
+If dependencies were installed with lifecycle scripts disabled, run
+`pnpm run prepare` once to activate the hooks. Git clients must have Node.js and pnpm on
+their `PATH`. Type checking and tests inspect the working tree, so finish or stash
+unrelated edits before committing a partially staged change.
+
 ## Course Structure
 
 The cohort is split across 6 days of content:
