@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Form, useLocation } from "react-router";
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
@@ -40,10 +40,26 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
-export function DevUI({ users, currentUser, devCountry, countryTierInfo, countries }: DevUIProps) {
+export function DevUI({
+  users,
+  currentUser,
+  devCountry,
+  countryTierInfo,
+  countries,
+}: DevUIProps) {
   const [minimized, setMinimized] = useState(false);
   const [open, setOpen] = useState(false);
+  const currentUserId = currentUser?.id ?? null;
+  const previousUserId = useRef(currentUserId);
   const location = useLocation();
+
+  useEffect(() => {
+    if (previousUserId.current === currentUserId) return;
+
+    previousUserId.current = currentUserId;
+    setOpen(false);
+  }, [currentUserId]);
+
   if (minimized) {
     return (
       <div className="fixed bottom-4 right-4 z-50">
