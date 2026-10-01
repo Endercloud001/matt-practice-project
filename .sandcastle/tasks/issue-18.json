@@ -1,0 +1,16 @@
+{
+  "body": "## 问题描述\n\n在本项目的 DEV UI 中，打开 **Switch user** 下拉列表并选择其他用户后，身份已经成功切换，但用户列表仍保持展开，没有自动收起。\n\n## 复现步骤\n\n1. 打开 DEV UI 面板。\n2. 点击 **Switch user** 展开用户列表。\n3. 选择一个与当前用户不同的身份。\n4. 确认当前身份已切换，观察用户列表的展开状态。\n\n## 实际行为\n\n身份切换成功后，Switch user 下拉列表仍保持展开。\n\n## 预期行为\n\n选择其他用户并成功切换身份后，Switch user 下拉列表应自动收起。\n\n## 影响\n\n用户已经完成身份选择，但菜单仍占据界面空间，需要额外操作将其收起。\n\n## 报告来源与验证状态\n\n- 根据用户在项目 DEV UI 中的操作反馈提交。\n- 用户提供了 DEV UI 面板及用户列表展开状态的两张截图；截图未上传到本 Issue。\n- 本报告未独立复现；具体浏览器、操作系统及发生时的代码版本尚未记录。",
+  "comments": [],
+  "labels": [
+    {
+      "id": "LA_kwDOUgYQ3M8AAAAC2mBr_g",
+      "name": "bug",
+      "description": "Something isn't working",
+      "color": "d73a4a"
+    }
+  ],
+  "number": 18,
+  "state": "OPEN",
+  "title": "[Bug] DEV UI：切换用户成功后，Switch user 下拉列表未自动收起",
+  "url": "https://github.com/Endercloud001/matt-practice-project/issues/18"
+}
