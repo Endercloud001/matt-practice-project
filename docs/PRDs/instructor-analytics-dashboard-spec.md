@@ -1,3 +1,5 @@
+> Status: completed; retained as the specification for existing behavior, not a Ralph Loop task. Verified on 2026-10-01: [Issue #1](https://github.com/Endercloud001/matt-practice-project/issues/1) and its implementation Issues #2–#8 are closed. The current dev branch contains the analytics implementation. Statements about missing code and future work below describe the original specification phase; use current source, tests and Issue discussions for present implementation status.
+
 ## Problem Statement
 
 Instructor 缺少一个统一、只读的视图，将自己 Course 的 Gross sales、Enrollment Count 和 Student progress 联系起来，识别购买总额较高但学习成效较弱的课程。Admin 需要在已有全局课程权限内完成相同分析，并按 Instructor 和 Course 缩小范围。
@@ -109,7 +111,7 @@ This spec does not claim implementation tests have run. This phase creates requi
 
 ## Further Notes
 
-- Requirements source: `docs/instructor-analytics-dashboard.md`, whose Grill completion records explicit shared understanding. The synthesis workflow prompt is archived at `docs/archived docs/dashboard-to-spec.md`; it is historical context, not the entry point for ticket planning or implementation. Root domain terminology and all five project standards were read. Archived questions/recommendations are not stronger authority than later confirmed decisions.
+- Requirements source: the original Instructor analytics dashboard Grill record, now in the local archive and not distributed through Git. This document and [Issue #1](https://github.com/Endercloud001/matt-practice-project/issues/1) contain the specification; agents do not need the local archive to understand the agreed behavior. Root domain terminology and all five project standards were read. Archived questions/recommendations are not stronger authority than later confirmed decisions.
 - Source discrepancy: an earlier resolved section and the invocation document mention quiz metrics in per-course summaries. The later **Resolved frontend presentation decisions** explicitly reserves quiz details for the course-scoped page. This spec follows that latest confirmation. Likewise the final same-level progress KPI and horizontally scrolling mobile table supersede earlier alternatives.
 - Required handoff `docs/instructor-analytics-dashboard-handoff-v1.md` is absent. Referenced ADR `docs/adr/0001-instructor-analytics-read-service.md` is absent, and no ADR directory was found. No content or architectural approval from either missing document is assumed.
 - Data gaps remain: purchases have no currency code or refund ledger; reliable retention/activity events and instructor teaching-progress events are absent. Lesson progress is mutable current state, not complete historical event coverage. Existing unenrollment physically deletes enrollments, so historical membership cannot be reconstructed. The project's soft-delete standard does not retroactively restore those records; changing existing deletion flows is outside this read-only feature.

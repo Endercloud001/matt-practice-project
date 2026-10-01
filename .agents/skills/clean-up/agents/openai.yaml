@@ -1,0 +1,7 @@
+interface:
+  display_name: "Clean Up"
+  short_description: "探索项目并生成可审查的过时文件与临时验收材料清理清单"
+  default_prompt: "Use $clean-up to explore this project and produce a reviewable clean-list.md before removing stale artifacts."
+
+policy:
+  allow_implicit_invocation: true
